@@ -10,11 +10,11 @@
 #  Ksilly - 简单 SillyTavern 部署脚本
 #  作者: Mia1889
 #  仓库: https://github.com/Mia1889/Ksilly
-#  版本: 2.2.1
+#  版本: 2.2.2
 #
 
 # ==================== 全局常量 ====================
-SCRIPT_VERSION="2.2.1"
+SCRIPT_VERSION="2.2.2"
 KSILLY_CONF="$HOME/.ksilly.conf"
 DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
 SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
@@ -30,13 +30,11 @@ GITHUB_PROXIES=(
 # ==================== 插件定义 ====================
 PLUGIN_DIR_NAME="public/scripts/extensions/third-party"
 
-# 插件1: 酒馆助手
 PLUGIN_1_NAME="酒馆助手 (JS-Slash-Runner)"
 PLUGIN_1_FOLDER="JS-Slash-Runner"
 PLUGIN_1_REPO_INTL="https://github.com/N0VI028/JS-Slash-Runner.git"
 PLUGIN_1_REPO_CN="https://gitlab.com/novi028/JS-Slash-Runner"
 
-# 插件2: 提示词模板
 PLUGIN_2_NAME="提示词模板 (ST-Prompt-Template)"
 PLUGIN_2_FOLDER="ST-Prompt-Template"
 PLUGIN_2_REPO_INTL="https://github.com/zonde306/ST-Prompt-Template.git"
@@ -46,6 +44,7 @@ PLUGIN_2_REPO_CN="https://codeberg.org/zonde306/ST-Prompt-Template.git"
 CADDYFILE_PATH="/etc/caddy/Caddyfile"
 CADDY_SERVICE="caddy"
 CADDY_CERT_DIR="/etc/caddy/certs"
+CADDY_AUTOSAVE="/var/lib/caddy/.config/caddy/autosave.json"
 
 # ==================== 颜色定义 ====================
 RED='\033[0;31m'
@@ -71,10 +70,9 @@ NEED_SUDO=""
 UPDATE_BEHIND=0
 CACHED_PUBLIC_IP=""
 
-# HTTPS 状态变量
 CADDY_HTTPS_ENABLED=false
 CADDY_DOMAIN=""
-CADDY_CERT_TYPE=""   # "acme" 或 "selfsigned"
+CADDY_CERT_TYPE=""
 
 # ==================== 旋转动画 ====================
 
@@ -358,12 +356,10 @@ show_access_info() {
     echo -e "  ${BOLD}访问地址 (记好了哦杂鱼♡):${NC}"
 
     if [[ "$CADDY_HTTPS_ENABLED" == "true" ]]; then
-        # HTTPS 模式
         if [[ -n "$CADDY_DOMAIN" && "$CADDY_CERT_TYPE" == "acme" ]]; then
             echo -e "    HTTPS 访问 → ${CYAN}https://${CADDY_DOMAIN}${NC}"
             echo -e "    本机访问   → ${CYAN}https://127.0.0.1${NC} ${DIM}(证书域名不匹配会警告)${NC}"
         else
-            # 自签证书
             echo -e "    本机访问   → ${CYAN}https://127.0.0.1${NC} ${DIM}(需信任自签证书)${NC}"
             local local_ip public_ip
             local_ip=$(get_local_ip)
@@ -383,7 +379,6 @@ show_access_info() {
         fi
         echo -e "  ${DIM}  HTTP 直连已禁用~只能通过 HTTPS 访问哦♡${NC}"
     else
-        # 传统 HTTP 模式
         echo -e "    本机访问   → ${CYAN}http://127.0.0.1:${port}${NC}"
 
         if [[ "$listen" == "true" ]]; then
@@ -993,7 +988,6 @@ generate_self_signed_cert() {
 
     $NEED_SUDO mkdir -p "$CADDY_CERT_DIR"
 
-    # 收集 IP 用于 SAN
     local local_ip public_ip san_entries
     local_ip=$(get_local_ip)
     public_ip=$(get_public_ip)
@@ -1005,7 +999,6 @@ generate_self_signed_cert() {
 
     info "证书覆盖地址: ${san_entries}"
 
-    # 生成证书 (10年有效期，无交互)
     if $NEED_SUDO openssl req -x509 -newkey rsa:2048 \
         -keyout "$CADDY_CERT_DIR/key.pem" \
         -out "$CADDY_CERT_DIR/cert.pem" \
@@ -1014,7 +1007,6 @@ generate_self_signed_cert() {
         -addext "subjectAltName=${san_entries}" \
         2>/dev/null; then
 
-        # 设置权限给 caddy 用户
         if id caddy &>/dev/null; then
             $NEED_SUDO chown caddy:caddy "$CADDY_CERT_DIR/key.pem" "$CADDY_CERT_DIR/cert.pem"
         fi
@@ -1107,6 +1099,8 @@ is_caddy_running() {
 caddy_start() {
     [[ "$IS_TERMUX" == true ]] && return 1
     get_sudo || return 1
+    # 清除 Caddy 缓存配置，防止旧配置残留导致不监听 443
+    $NEED_SUDO rm -f "$CADDY_AUTOSAVE" 2>/dev/null
     $NEED_SUDO systemctl enable "$CADDY_SERVICE" &>/dev/null
     $NEED_SUDO systemctl start "$CADDY_SERVICE" &>/dev/null
     sleep 2
@@ -1129,6 +1123,8 @@ caddy_stop() {
 caddy_restart() {
     [[ "$IS_TERMUX" == true ]] && return 1
     get_sudo || return 1
+    # 清除缓存配置再重启
+    $NEED_SUDO rm -f "$CADDY_AUTOSAVE" 2>/dev/null
     $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
     sleep 2
     if is_caddy_running; then
@@ -1143,6 +1139,7 @@ caddy_restart() {
 caddy_reload() {
     [[ "$IS_TERMUX" == true ]] && return 1
     get_sudo || return 1
+    $NEED_SUDO rm -f "$CADDY_AUTOSAVE" 2>/dev/null
     $NEED_SUDO systemctl reload "$CADDY_SERVICE" &>/dev/null 2>&1 || \
         $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
     sleep 1
@@ -1155,7 +1152,6 @@ generate_caddyfile() {
 
     get_sudo || return 1
 
-    # 备份旧的 Caddyfile
     if [[ -f "$CADDYFILE_PATH" ]]; then
         $NEED_SUDO cp "$CADDYFILE_PATH" "${CADDYFILE_PATH}.bak.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
     fi
@@ -1163,21 +1159,20 @@ generate_caddyfile() {
     $NEED_SUDO mkdir -p "$(dirname "$CADDYFILE_PATH")"
 
     if [[ "$cert_type" == "acme" && -n "$domain" ]]; then
-        # 有域名 - Let's Encrypt 自动证书
         $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << CADDYEOF
 # Ksilly 生成 - 域名 HTTPS (Let's Encrypt)
 ${domain} {
-    reverse_proxy localhost:${port}
+	reverse_proxy localhost:${port}
 }
 CADDYEOF
         info "Caddyfile 生成好了~域名: ${domain} ♡"
     else
-        # 无域名 - 使用 openssl 生成的自签证书
+        # 自签证书：用 https:// 强制 Caddy 走 TLS
         $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << CADDYEOF
 # Ksilly 生成 - 自签证书 HTTPS
-:443 {
-    tls ${CADDY_CERT_DIR}/cert.pem ${CADDY_CERT_DIR}/key.pem
-    reverse_proxy localhost:${port}
+https:// {
+	tls ${CADDY_CERT_DIR}/cert.pem ${CADDY_CERT_DIR}/key.pem
+	reverse_proxy localhost:${port}
 }
 CADDYEOF
         info "Caddyfile 生成好了~自签证书模式 ♡"
@@ -1185,13 +1180,11 @@ CADDYEOF
 }
 
 setup_https() {
-    # 守卫: Termux 跳过
     if [[ "$IS_TERMUX" == true ]]; then
         info "Termux 不支持 HTTPS 配置~跳过♡"
         return 0
     fi
 
-    # 守卫: 未开启监听则跳过
     local config_file="$INSTALL_DIR/config.yaml"
     local listen_val
     listen_val=$(get_yaml_val "listen" "$config_file")
@@ -1214,7 +1207,6 @@ setup_https() {
         return 0
     fi
 
-    # 安装 Caddy
     install_caddy || { error "Caddy 装不上~HTTPS 搞不了♡"; return 1; }
 
     local port
@@ -1222,7 +1214,6 @@ setup_https() {
 
     echo ""
     if confirm "杂鱼有域名吗~♡"; then
-        # === 有域名流程 ===
         echo ""
         echo -e "  ${DIM}域名要提前解析到这台服务器的公网 IP 哦~♡${NC}"
         local public_ip
@@ -1246,10 +1237,8 @@ setup_https() {
         CADDY_DOMAIN="$domain"
         CADDY_CERT_TYPE="acme"
 
-        # 生成 Caddyfile
         generate_caddyfile "$port" "$domain" "acme"
 
-        # 防火墙: 开放 80 (ACME 验证) + 443, 关闭 ST_PORT
         echo ""
         step "调整防火墙~♡"
         open_firewall_port 80
@@ -1258,11 +1247,9 @@ setup_https() {
         info "关闭 ST 端口 ${port} 的外部访问~♡"
         remove_firewall_port "$port"
 
-        # SillyTavern 改为只监听本地
         set_yaml_val "listen" "false" "$config_file"
         info "SillyTavern 已改为本地监听~由 Caddy 反代 ♡"
 
-        # 启动 Caddy
         echo ""
         step "启动 Caddy~♡"
         caddy_start
@@ -1280,7 +1267,6 @@ setup_https() {
         warn "云服务器记得在安全组放行 80 和 443 端口♡"
 
     else
-        # === 无域名流程 (自签证书) ===
         echo ""
         echo -e "  ${DIM}没有域名也没关系~用自签证书一样能 HTTPS♡${NC}"
         echo -e "  ${YELLOW}⚠ 浏览器会显示安全警告~点「高级→继续访问」即可${NC}"
@@ -1290,13 +1276,10 @@ setup_https() {
         CADDY_DOMAIN=""
         CADDY_CERT_TYPE="selfsigned"
 
-        # 生成自签证书
         generate_self_signed_cert || { error "证书生成失败~HTTPS 搞不了♡"; return 1; }
 
-        # 生成 Caddyfile
         generate_caddyfile "$port" "" "selfsigned"
 
-        # 防火墙: 开放 443, 关闭 ST_PORT
         echo ""
         step "调整防火墙~♡"
         open_firewall_port 443
@@ -1304,11 +1287,9 @@ setup_https() {
         info "关闭 ST 端口 ${port} 的外部访问~♡"
         remove_firewall_port "$port"
 
-        # SillyTavern 改为只监听本地
         set_yaml_val "listen" "false" "$config_file"
         info "SillyTavern 已改为本地监听~由 Caddy 反代 ♡"
 
-        # 启动 Caddy
         echo ""
         step "启动 Caddy~♡"
         caddy_start
@@ -1360,12 +1341,10 @@ remove_https() {
     local port
     port=$(get_port)
 
-    # 停止 Caddy
     step "停止 Caddy~♡"
     caddy_stop
     $NEED_SUDO systemctl disable "$CADDY_SERVICE" &>/dev/null
 
-    # 还原 Caddyfile
     if ls "${CADDYFILE_PATH}.bak."* &>/dev/null 2>&1; then
         local latest_bak
         latest_bak=$(ls -t "${CADDYFILE_PATH}.bak."* 2>/dev/null | head -1)
@@ -1375,29 +1354,23 @@ remove_https() {
         fi
     else
         $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << 'CADDYEOF'
-# The Caddyfile is an easy way to configure your Caddy web server.
-# https://caddyserver.com/docs/caddyfile
 :80 {
-    respond "Caddy is running" 200
+	respond "Caddy is running" 200
 }
 CADDYEOF
         info "Caddyfile 重置为默认~♡"
     fi
 
-    # 清理自签证书
     remove_self_signed_cert
 
-    # 恢复 SillyTavern 公网监听
     set_yaml_val "listen" "true" "$config_file"
     info "SillyTavern 恢复公网监听~♡"
 
-    # 防火墙: 关闭 443/80, 重新开放 ST_PORT
     step "调整防火墙~♡"
     remove_firewall_port 443
     remove_firewall_port 80
     open_firewall_port "$port"
 
-    # 清除 HTTPS 状态
     CADDY_HTTPS_ENABLED=false
     CADDY_DOMAIN=""
     CADDY_CERT_TYPE=""
@@ -2003,7 +1976,6 @@ configure_sillytavern() {
     echo -e "  ${BOLD}${PINK}配置向导 ~跟着人家选就行了杂鱼♡${NC}"
     divider
 
-    # --- 监听设置 ---
     echo ""
     echo -e "  ${BOLD}1. 监听模式${NC}"
     echo -e "     ${DIM}开了的话局域网和外网设备都能访问哦~${NC}"
@@ -2020,7 +1992,6 @@ configure_sillytavern() {
         info "只能本机访问~♡"
     fi
 
-    # --- 端口 ---
     echo ""
     echo -e "  ${BOLD}2. 端口设置${NC}"
     local port
@@ -2033,7 +2004,6 @@ configure_sillytavern() {
         port="8000"
     fi
 
-    # --- 白名单 ---
     echo ""
     echo -e "  ${BOLD}3. 白名单模式${NC}"
     echo -e "     ${DIM}开了的话只有白名单里的 IP 才能访问~${NC}"
@@ -2047,7 +2017,6 @@ configure_sillytavern() {
         info "白名单开着~安全第一♡"
     fi
 
-    # --- 基础认证 ---
     echo ""
     echo -e "  ${BOLD}4. 基础认证 (HTTP Auth)${NC}"
     echo -e "     ${DIM}访问的时候要输用户名密码~${NC}"
@@ -2087,13 +2056,11 @@ EOF
         info "不设认证啊~胆子挺大的杂鱼♡"
     fi
 
-    # --- 防火墙 (仅在未使用 HTTPS 时直接开 ST 端口) ---
     if [[ "$listen_enabled" == true ]]; then
         echo ""
         open_firewall_port "$port"
     fi
 
-    # --- HTTPS 配置 (非 Termux 且开了监听) ---
     if [[ "$listen_enabled" == true && "$IS_TERMUX" != true ]]; then
         setup_https
     fi
@@ -2154,7 +2121,6 @@ start_sillytavern() {
             step "PM2 后台启动中~♡"
             pm2_start
 
-            # 如果 HTTPS 启用，确保 Caddy 也在运行
             if [[ "$CADDY_HTTPS_ENABLED" == "true" && "$IS_TERMUX" != true ]]; then
                 if ! is_caddy_running; then
                     step "顺便启动 Caddy~♡"
@@ -2168,7 +2134,6 @@ start_sillytavern() {
             step "前台启动~♡"
             info "按 Ctrl+C 就能停哦~♡"
 
-            # 如果 HTTPS 启用，确保 Caddy 也在运行
             if [[ "$CADDY_HTTPS_ENABLED" == "true" && "$IS_TERMUX" != true ]]; then
                 if ! is_caddy_running; then
                     step "顺便启动 Caddy~♡"
@@ -2207,7 +2172,6 @@ restart_sillytavern() {
     sleep 1
     pm2_start
 
-    # HTTPS 启用时也重载 Caddy
     if [[ "$CADDY_HTTPS_ENABLED" == "true" && "$IS_TERMUX" != true ]]; then
         if is_caddy_running; then
             caddy_reload
@@ -2257,7 +2221,6 @@ show_status() {
         echo -e "    进程管理   ${DIM}没配置♡${NC}"
     fi
 
-    # HTTPS 状态
     if [[ "$CADDY_HTTPS_ENABLED" == "true" ]]; then
         if [[ "$CADDY_CERT_TYPE" == "acme" ]]; then
             echo -e "    HTTPS      ${GREEN}● Let's Encrypt${NC}"
@@ -2278,7 +2241,6 @@ show_status() {
 
     echo ""
 
-    # 插件信息
     echo -e "  ${BOLD}已安装插件~♡${NC}"
     divider
 
@@ -2485,13 +2447,11 @@ uninstall_sillytavern() {
     pm2_stop
     pm2_remove
 
-    # 清理 HTTPS / Caddy
     if [[ "$CADDY_HTTPS_ENABLED" == "true" && "$IS_TERMUX" != true ]]; then
         step "清理 HTTPS 配置~♡"
         caddy_stop
         $NEED_SUDO systemctl disable "$CADDY_SERVICE" &>/dev/null
 
-        # 还原 Caddyfile
         if ls "${CADDYFILE_PATH}.bak."* &>/dev/null 2>&1; then
             local latest_bak
             latest_bak=$(ls -t "${CADDYFILE_PATH}.bak."* 2>/dev/null | head -1)
@@ -2499,12 +2459,11 @@ uninstall_sillytavern() {
         else
             $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << 'CADDYEOF'
 :80 {
-    respond "Caddy is running" 200
+	respond "Caddy is running" 200
 }
 CADDYEOF
         fi
 
-        # 清理自签证书
         remove_self_signed_cert
 
         remove_firewall_port 443
@@ -2559,7 +2518,6 @@ CADDYEOF
         info "Node.js 删掉了~♡"
     fi
 
-    # 可选卸载 Caddy
     if [[ "$IS_TERMUX" != true ]] && command_exists caddy; then
         echo ""
         if confirm "顺便把 Caddy 也删了~♡"; then
@@ -2610,7 +2568,6 @@ modify_config_menu() {
         echo -e "    多账户系统     $(format_bool "${user_acc:-false}")"
         echo -e "    隐蔽登录       $(format_bool "${discreet:-false}")"
 
-        # HTTPS 状态简报
         if [[ "$CADDY_HTTPS_ENABLED" == "true" ]]; then
             if [[ "$CADDY_CERT_TYPE" == "acme" ]]; then
                 echo -e "    HTTPS          ${GREEN}● Let's Encrypt (${CADDY_DOMAIN})${NC}"
@@ -2920,7 +2877,6 @@ full_install() {
     clone_sillytavern
     configure_sillytavern
 
-    # 安装后询问是否安装插件
     echo ""
     divider
     echo -e "  ${BOLD}${PINK}要不要顺便装几个好用的插件~♡${NC}"
@@ -3024,7 +2980,6 @@ main_menu() {
             is_plugin_installed "$PLUGIN_2_FOLDER" && ((p_count++))
             [[ "$p_count" -gt 0 ]] && echo -e "  ${DIM}  插件: ${p_count} 个已安装${NC}"
 
-            # HTTPS 状态指示
             if [[ "$CADDY_HTTPS_ENABLED" == "true" ]]; then
                 if [[ "$CADDY_CERT_TYPE" == "acme" ]]; then
                     echo -e "  ${DIM}  HTTPS: ${GREEN}●${NC}${DIM} Let's Encrypt (${CADDY_DOMAIN})${NC}"
