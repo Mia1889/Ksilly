@@ -2222,9 +2222,9 @@ main_menu() {
         divider
         echo ""
         echo -e "  ${BOLD}安装与管理${NC}"
-        echo -e "    ${GREEN} 1)${NC} 安装 SillyTavern"
-        echo -e "    ${GREEN} 2)${NC} 更新 SillyTavern"
-        echo -e "    ${GREEN} 3)${NC} 卸载 SillyTavern"
+        echo -e "    ${GREEN} 1)${NC} 安装"
+        echo -e "    ${GREEN} 2)${NC} 更新"
+        echo -e "    ${GREEN} 3)${NC} 卸载"
         echo ""
         echo -e "  ${BOLD}运行控制${NC}"
         echo -e "    ${GREEN} 4)${NC} 启动"
