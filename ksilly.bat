@@ -1,4 +1,10 @@
 @echo off
+:: ============================================================
+::  Ksilly v2.0.0 - SillyTavern Windows Launcher
+::  Auto-install Git / Node.js / Run ksilly.sh
+::  Repo: https://github.com/Mia1889/Ksilly
+:: ============================================================
+chcp 65001 >nul 2>&1
 setlocal EnableDelayedExpansion
 
 set "VER=2.0.0"
@@ -10,134 +16,169 @@ set "NEED_RESTART=0"
 set "IS_ADMIN=0"
 set "USE_CHINA=0"
 
-title Ksilly v%VER%
+title Ksilly v%VER% - SillyTavern
 cls
-
 echo.
-echo   ===================================================
-echo    Ksilly v%VER% - SillyTavern Auto Deploy (Windows)
-echo   ===================================================
+echo   _  __     _ _ _
+echo   ^| ^|/ /    ^(_) ^| ^|
+echo   ^| ' / ___ _^| ^| ^|_   _
+echo   ^|  ^< / __^| ^| ^| ^| ^| ^| ^|
+echo   ^| . \\__ \ ^| ^| ^| ^|_^| ^|
+echo   ^|_^|\_\___/_^|_^|_^|\__, ^|
+echo                     __/ ^|
+echo                    ^|___/
+echo.
+echo   SillyTavern Installer v%VER%  [Windows]
+echo   =============================================
 echo.
 
+:: =============================================
+:: Check admin
+:: =============================================
 net session >nul 2>&1
-if !ERRORLEVEL! equ 0 set "IS_ADMIN=1"
-
-echo   [0/5] Detecting network...
-set "NET_OK=0"
-curl -s --connect-timeout 3 --max-time 5 "https://www.google.com" >nul 2>&1
 if !ERRORLEVEL! equ 0 (
-    set "NET_OK=1"
-    echo         International network - direct connect
-) else (
+    set "IS_ADMIN=1"
+)
+
+:: =============================================
+:: Detect network (China?)
+:: =============================================
+echo   [0/5] Detecting network...
+curl -s --connect-timeout 3 --max-time 5 "https://www.google.com" >nul 2>&1
+if !ERRORLEVEL! neq 0 (
     curl -s --connect-timeout 3 --max-time 5 "https://www.baidu.com" >nul 2>&1
     if !ERRORLEVEL! equ 0 (
         set "USE_CHINA=1"
-        set "NET_OK=1"
-        echo         China mainland - using mirror
+        echo   [OK] China mainland detected, using proxy
     ) else (
-        echo         Network issue - will try anyway
+        echo   [!!] Network issue, will try anyway
     )
+) else (
+    echo   [OK] International network, direct connect
 )
 echo.
 
+:: =============================================
+:: Step 1: Check / Install Git
+:: =============================================
 echo   [1/5] Checking Git...
 call :find_git
 if defined GIT_OK (
-    for /f "tokens=*" %%v in ('git --version 2^>nul') do echo         Found: %%v
-    goto :step2
+    for /f "tokens=*" %%v in ('git --version 2^>nul') do echo   [OK] %%v
+    goto :check_node
 )
-echo         Not found. Installing...
+
+echo   [!!] Git not found, installing...
+echo.
 call :install_git
-call :refresh_path
 call :find_git
 if not defined GIT_OK (
     echo.
-    echo   ==================================================
-    echo    FAILED: Git auto-install did not succeed.
+    echo   =============================================
+    echo   Git auto-install failed.
     echo.
-    echo    Please install Git for Windows manually:
-    echo      https://git-scm.com/download/win
+    echo   Please install manually:
+    echo     https://git-scm.com/download/win
     echo.
-    echo    After installing, re-run this script.
-    echo   ==================================================
+    echo   Then re-run this script.
+    echo   =============================================
+    echo.
     pause
-    goto :cleanup
+    goto :eof_clean
 )
-echo         Git installed OK
+echo   [OK] Git installed successfully
 set "NEED_RESTART=1"
 
-:step2
+:: =============================================
+:: Step 2: Check / Install Node.js
+:: =============================================
+:check_node
 echo.
 echo   [2/5] Checking Node.js...
 call :find_node
 if defined NODE_OK (
-    for /f "tokens=*" %%v in ('node -v 2^>nul') do echo         Found: Node.js %%v
-    goto :step2done
+    for /f "tokens=*" %%v in ('node -v 2^>nul') do echo   [OK] Node.js %%v
+    goto :check_deps_done
 )
-echo         Not found or too old. Installing...
+
+echo   [!!] Node.js not found or too old, installing...
+echo.
 call :install_node
 call :refresh_path
 call :find_node
 if not defined NODE_OK (
     echo.
-    echo   ==================================================
-    echo    FAILED: Node.js auto-install did not succeed.
+    echo   =============================================
+    echo   Node.js auto-install failed.
     echo.
-    echo    Please install Node.js LTS (v18+) manually:
-    echo      https://nodejs.org/
+    echo   Please install manually (v18+):
+    echo     https://nodejs.org/
     echo.
-    echo    After installing, re-run this script.
-    echo   ==================================================
+    echo   Then re-run this script.
+    echo   =============================================
+    echo.
     pause
-    goto :cleanup
+    goto :eof_clean
 )
-echo         Node.js installed OK
+echo   [OK] Node.js installed successfully
 set "NEED_RESTART=1"
 
-:step2done
+:check_deps_done
 
+:: Refresh PATH if new software installed
 if "!NEED_RESTART!"=="1" (
     echo.
-    echo   ---------------------------------------------------
-    echo    Refreshing environment...
-    echo   ---------------------------------------------------
+    echo   ---------------------------------------------
+    echo   [OK] Dependencies installed, refreshing...
+    echo   ---------------------------------------------
+    echo.
     call :refresh_path
     call :find_git
     call :find_node
     if not defined GIT_OK (
-        echo.
-        echo    Git not detected. Please close and re-run.
+        echo   [!!] Git not detected after install
+        echo       Please close this window and re-run
         pause
-        goto :cleanup
+        goto :eof_clean
     )
     if not defined NODE_OK (
-        echo.
-        echo    Node.js not detected. Please close and re-run.
+        echo   [!!] Node.js not detected after install
+        echo       Please close this window and re-run
         pause
-        goto :cleanup
+        goto :eof_clean
     )
+    echo   [OK] All dependencies verified
 )
 
+:: Show results
 echo.
-echo   ---------------------------------------------------
-for /f "tokens=*" %%v in ('git --version 2^>nul') do echo    %%v
-for /f "tokens=*" %%v in ('node -v 2^>nul') do echo    Node.js %%v
-for /f "tokens=*" %%v in ('npm -v 2^>nul') do echo    npm v%%v
-echo   ---------------------------------------------------
+echo   =============================================
+for /f "tokens=*" %%v in ('git --version 2^>nul') do echo   [OK] %%v
+for /f "tokens=*" %%v in ('node -v 2^>nul') do echo   [OK] Node.js %%v
+for /f "tokens=*" %%v in ('npm -v 2^>nul') do echo   [OK] npm v%%v
+echo   =============================================
 
+:: =============================================
+:: Step 3: Find Git Bash
+:: =============================================
 echo.
 echo   [3/5] Locating Git Bash...
 call :find_bash
 if not defined BASH_EXE (
-    echo         Cannot find bash.exe
-    echo         Please reinstall Git for Windows
+    echo   [!!] bash.exe not found
+    echo       Git install may be incomplete
+    echo       Please reinstall Git for Windows
     pause
-    goto :cleanup
+    goto :eof_clean
 )
-echo         OK: !BASH_EXE!
+echo   [OK] Git Bash: !BASH_EXE!
 
+:: =============================================
+:: Step 4: Get ksilly.sh
+:: =============================================
 echo.
-echo   [4/5] Downloading deploy script...
+echo   [4/5] Getting deploy script...
+
 if not exist "%ST_DIR%" mkdir "%ST_DIR%" 2>nul
 
 set "SH_FILE=%ST_DIR%\ksilly.sh"
@@ -145,60 +186,86 @@ set "SH_TMP=%ST_DIR%\ksilly.sh.tmp"
 set "GOT_NEW=0"
 
 if "!USE_CHINA!"=="1" (
-    call :dl "%PROXY%%REPO_RAW%/ksilly.sh" "%SH_TMP%"
+    call :download_file "%PROXY%%REPO_RAW%/ksilly.sh" "%SH_TMP%"
     if "!DL_OK!"=="1" set "GOT_NEW=1"
     if "!GOT_NEW!"=="0" (
-        call :dl "%REPO_RAW%/ksilly.sh" "%SH_TMP%"
+        call :download_file "%REPO_RAW%/ksilly.sh" "%SH_TMP%"
         if "!DL_OK!"=="1" set "GOT_NEW=1"
     )
 ) else (
-    call :dl "%REPO_RAW%/ksilly.sh" "%SH_TMP%"
+    call :download_file "%REPO_RAW%/ksilly.sh" "%SH_TMP%"
     if "!DL_OK!"=="1" set "GOT_NEW=1"
     if "!GOT_NEW!"=="0" (
-        call :dl "%PROXY%%REPO_RAW%/ksilly.sh" "%SH_TMP%"
+        call :download_file "%PROXY%%REPO_RAW%/ksilly.sh" "%SH_TMP%"
         if "!DL_OK!"=="1" set "GOT_NEW=1"
     )
 )
 
 if "!GOT_NEW!"=="1" (
     move /y "%SH_TMP%" "%SH_FILE%" >nul 2>&1
-    echo         Script updated
+    echo   [OK] Script updated
 ) else (
     del "%SH_TMP%" 2>nul
     if exist "%SH_FILE%" (
-        echo         Download failed, using cached copy
+        echo   [!!] Download failed, using cached version
     ) else (
-        echo         Download failed, no cache. Check network.
+        echo   [!!] Download failed and no cache found
+        echo       Please check your network connection
         pause
-        goto :cleanup
+        goto :eof_clean
     )
 )
 
+:: Save BAT itself
 set "BAT_DEST=%ST_DIR%\ksilly.bat"
 if not "%~f0"=="%BAT_DEST%" (
     copy /y "%~f0" "%BAT_DEST%" >nul 2>&1
+    if !ERRORLEVEL! equ 0 (
+        echo   [OK] Launcher saved: %BAT_DEST%
+        echo       You can double-click it next time
+    )
 )
 
+:: =============================================
+:: Step 5: Launch
+:: =============================================
 echo.
-echo   [5/5] Launching...
-echo   ---------------------------------------------------
+echo   [5/5] Launching Ksilly...
+echo   =============================================
 echo.
 
+:: Convert path for Git Bash
 set "SH_UNIX=%SH_FILE:\=/%"
-set "ARGS="
-if not "%~1"=="" set "ARGS=%*"
 
-if defined ARGS (
-    "!BASH_EXE!" --login -c "bash '%SH_UNIX%' !ARGS!"
+:: Collect args
+set "PASS_ARGS="
+if not "%~1"=="" set "PASS_ARGS=%*"
+
+:: Run Git Bash
+if defined PASS_ARGS (
+    "!BASH_EXE!" --login -c "bash '%SH_UNIX%' !PASS_ARGS!"
 ) else (
     "!BASH_EXE!" --login -c "bash '%SH_UNIX%'"
 )
 
+set "EC=!ERRORLEVEL!"
+if !EC! neq 0 (
+    echo.
+    echo   Exit code: !EC!
+)
 echo.
-pause
-goto :cleanup
+echo   Press any key to close...
+pause >nul
+goto :eof_clean
 
 
+:: #############################################
+:: #         SUBROUTINES                       #
+:: #############################################
+
+:: =============================================
+:: find_git
+:: =============================================
 :find_git
 set "GIT_OK="
 where git.exe >nul 2>&1
@@ -210,6 +277,7 @@ for %%p in (
     "%ProgramFiles%\Git\cmd\git.exe"
     "%ProgramFiles(x86)%\Git\cmd\git.exe"
     "%LOCALAPPDATA%\Programs\Git\cmd\git.exe"
+    "%USERPROFILE%\scoop\apps\git\current\cmd\git.exe"
     "C:\Git\cmd\git.exe"
 ) do (
     if exist "%%~p" (
@@ -220,45 +288,55 @@ for %%p in (
 )
 goto :eof
 
-
+:: =============================================
+:: find_node (>= v18)
+:: =============================================
 :find_node
 set "NODE_OK="
-set "FOUND_NODE=0"
 where node.exe >nul 2>&1
-if !ERRORLEVEL! equ 0 (
-    set "FOUND_NODE=1"
-    goto :chkver
+if !ERRORLEVEL! neq 0 (
+    for %%p in (
+        "%ProgramFiles%\nodejs\node.exe"
+        "%ProgramFiles(x86)%\nodejs\node.exe"
+        "%LOCALAPPDATA%\Programs\nodejs\node.exe"
+        "%APPDATA%\nvm\current\node.exe"
+        "%USERPROFILE%\scoop\apps\nodejs-lts\current\node.exe"
+        "%USERPROFILE%\scoop\apps\nodejs\current\node.exe"
+    ) do (
+        if exist "%%~p" (
+            for %%d in ("%%~dp") do set "PATH=%%~d;!PATH!"
+            goto :fn_check_ver
+        )
+    )
+    goto :eof
 )
-for %%p in (
-    "%ProgramFiles%\nodejs\node.exe"
-    "%ProgramFiles(x86)%\nodejs\node.exe"
-    "%LOCALAPPDATA%\Programs\nodejs\node.exe"
-    "%APPDATA%\nvm\current\node.exe"
-) do (
-    if exist "%%~p" (
-        for %%d in ("%%~dp") do set "PATH=%%~d;!PATH!"
-        set "FOUND_NODE=1"
-        goto :chkver
+:fn_check_ver
+for /f "tokens=1 delims=." %%a in ('node -v 2^>nul') do (
+    set "NVER=%%a"
+    set "NVER=!NVER:v=!"
+    if !NVER! GEQ 18 (
+        set "NODE_OK=1"
+    ) else (
+        echo   [!!] Node.js v!NVER! is too old, need v18+
     )
 )
 goto :eof
-:chkver
-for /f "tokens=1 delims=." %%a in ('node -v 2^>nul') do (
-    set "NV=%%a"
-    set "NV=!NV:v=!"
-    if !NV! GEQ 18 set "NODE_OK=1"
-)
-goto :eof
 
-
+:: =============================================
+:: find_bash
+:: =============================================
 :find_bash
 set "BASH_EXE="
 where git.exe >nul 2>&1
 if !ERRORLEVEL! equ 0 (
-    for /f "tokens=*" %%i in ('where git.exe 2^>nul') do (
-        set "GD=%%~dpi"
-        if exist "!GD!..\bin\bash.exe" (
-            set "BASH_EXE=!GD!..\bin\bash.exe"
+    for /f "tokens=* usebackq" %%i in (`where git.exe`) do (
+        set "GIT_DIR=%%~dpi"
+        if exist "!GIT_DIR!..\bin\bash.exe" (
+            set "BASH_EXE=!GIT_DIR!..\bin\bash.exe"
+            goto :eof
+        )
+        if exist "!GIT_DIR!bash.exe" (
+            set "BASH_EXE=!GIT_DIR!bash.exe"
             goto :eof
         )
     )
@@ -267,6 +345,7 @@ for %%p in (
     "%ProgramFiles%\Git\bin\bash.exe"
     "%ProgramFiles(x86)%\Git\bin\bash.exe"
     "%LOCALAPPDATA%\Programs\Git\bin\bash.exe"
+    "%USERPROFILE%\scoop\apps\git\current\bin\bash.exe"
     "C:\Git\bin\bash.exe"
 ) do (
     if exist "%%~p" (
@@ -276,105 +355,217 @@ for %%p in (
 )
 goto :eof
 
-
+:: =============================================
+:: install_git
+:: =============================================
 :install_git
+echo   ---------------------------------------------
+echo   Installing Git for Windows...
+echo   ---------------------------------------------
+
+:: Method 1: winget
 where winget.exe >nul 2>&1
 if !ERRORLEVEL! equ 0 (
-    echo         Trying winget...
+    echo   Trying winget...
     winget install --id Git.Git --accept-package-agreements --accept-source-agreements -e --silent 2>nul
-    call :refresh_path
-    call :find_git
-    if defined GIT_OK goto :eof
+    if !ERRORLEVEL! equ 0 (
+        call :refresh_path
+        call :find_git
+        if defined GIT_OK (
+            echo   [OK] Git installed via winget
+            goto :eof
+        )
+    )
+    echo   [!!] winget failed, trying download...
 )
-echo         Downloading Git installer...
+
+:: Method 2: Download installer
+echo   Downloading Git installer...
 if not exist "%TEMP_DIR%" mkdir "%TEMP_DIR%" 2>nul
-set "GI=%TEMP_DIR%\git-setup.exe"
-set "GU=https://github.com/git-for-windows/git/releases/latest/download/Git-2.49.0-64-bit.exe"
+set "GIT_INSTALLER=%TEMP_DIR%\git-installer.exe"
+set "GIT_URL=https://github.com/git-for-windows/git/releases/latest/download/Git-2.49.0-64-bit.exe"
+
 if "!USE_CHINA!"=="1" (
-    call :dl "%PROXY%!GU!" "%GI%"
-    if "!DL_OK!"=="0" call :dl "https://registry.npmmirror.com/-/binary/git-for-windows/v2.49.0.windows.1/Git-2.49.0-64-bit.exe" "%GI%"
+    call :download_file "%PROXY%!GIT_URL!" "%GIT_INSTALLER%"
+    if "!DL_OK!"=="0" (
+        call :download_file "https://registry.npmmirror.com/-/binary/git-for-windows/v2.49.0.windows.1/Git-2.49.0-64-bit.exe" "%GIT_INSTALLER%"
+    )
 ) else (
-    call :dl "!GU!" "%GI%"
-    if "!DL_OK!"=="0" call :dl "%PROXY%!GU!" "%GI%"
+    call :download_file "!GIT_URL!" "%GIT_INSTALLER%"
+    if "!DL_OK!"=="0" (
+        call :download_file "%PROXY%!GIT_URL!" "%GIT_INSTALLER%"
+    )
 )
-if not exist "%GI%" goto :eof
-for %%A in ("%GI%") do if %%~zA LSS 5000000 (del "%GI%" 2>nul & goto :eof)
-echo         Installing silently (1-2 min)...
-"%GI%" /VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh" 2>nul
+
+if not exist "%GIT_INSTALLER%" (
+    echo   [!!] Git download failed
+    goto :eof
+)
+
+for %%A in ("%GIT_INSTALLER%") do (
+    if %%~zA LSS 5000000 (
+        echo   [!!] Downloaded file too small, may be corrupt
+        del "%GIT_INSTALLER%" 2>nul
+        goto :eof
+    )
+)
+
+echo   [OK] Download complete
+echo   Installing silently (1-2 min, please wait)...
+echo.
+echo   ** If a security prompt appears, click YES **
+echo.
+
+"%GIT_INSTALLER%" /VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh" 2>nul
+
 timeout /t 5 /nobreak >nul 2>&1
-del "%GI%" 2>nul
 call :refresh_path
+del "%GIT_INSTALLER%" 2>nul
 goto :eof
 
-
+:: =============================================
+:: install_node
+:: =============================================
 :install_node
+echo   ---------------------------------------------
+echo   Installing Node.js LTS...
+echo   ---------------------------------------------
+
+:: Method 1: winget
 where winget.exe >nul 2>&1
 if !ERRORLEVEL! equ 0 (
-    echo         Trying winget...
+    echo   Trying winget...
     winget install --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements -e --silent 2>nul
-    call :refresh_path
-    call :find_node
-    if defined NODE_OK goto :eof
+    if !ERRORLEVEL! equ 0 (
+        call :refresh_path
+        call :find_node
+        if defined NODE_OK (
+            echo   [OK] Node.js installed via winget
+            goto :eof
+        )
+    )
+    echo   [!!] winget failed, trying download...
 )
-echo         Downloading Node.js installer...
+
+:: Method 2: Download MSI
+echo   Downloading Node.js installer...
 if not exist "%TEMP_DIR%" mkdir "%TEMP_DIR%" 2>nul
-set "NI=%TEMP_DIR%\node-setup.msi"
-set "NV=20.18.0"
+set "NODE_INSTALLER=%TEMP_DIR%\node-installer.msi"
+set "NODE_VER=20.18.0"
+
 if "!USE_CHINA!"=="1" (
-    call :dl "https://npmmirror.com/mirrors/node/v%NV%/node-v%NV%-x64.msi" "%NI%"
-    if "!DL_OK!"=="0" call :dl "https://nodejs.org/dist/v%NV%/node-v%NV%-x64.msi" "%NI%"
+    call :download_file "https://npmmirror.com/mirrors/node/v%NODE_VER%/node-v%NODE_VER%-x64.msi" "%NODE_INSTALLER%"
+    if "!DL_OK!"=="0" (
+        call :download_file "https://nodejs.org/dist/v%NODE_VER%/node-v%NODE_VER%-x64.msi" "%NODE_INSTALLER%"
+    )
 ) else (
-    call :dl "https://nodejs.org/dist/v%NV%/node-v%NV%-x64.msi" "%NI%"
-    if "!DL_OK!"=="0" call :dl "https://npmmirror.com/mirrors/node/v%NV%/node-v%NV%-x64.msi" "%NI%"
+    call :download_file "https://nodejs.org/dist/v%NODE_VER%/node-v%NODE_VER%-x64.msi" "%NODE_INSTALLER%"
+    if "!DL_OK!"=="0" (
+        call :download_file "https://npmmirror.com/mirrors/node/v%NODE_VER%/node-v%NODE_VER%-x64.msi" "%NODE_INSTALLER%"
+    )
 )
-if not exist "%NI%" goto :eof
-for %%A in ("%NI%") do if %%~zA LSS 5000000 (del "%NI%" 2>nul & goto :eof)
-echo         Installing silently (1-2 min)...
+
+if not exist "%NODE_INSTALLER%" (
+    echo   [!!] Node.js download failed
+    goto :eof
+)
+
+for %%A in ("%NODE_INSTALLER%") do (
+    if %%~zA LSS 5000000 (
+        echo   [!!] Downloaded file too small, may be corrupt
+        del "%NODE_INSTALLER%" 2>nul
+        goto :eof
+    )
+)
+
+echo   [OK] Download complete
+echo   Installing silently (1-2 min, please wait)...
+echo.
+echo   ** If a security prompt appears, click YES **
+echo.
+
 if "!IS_ADMIN!"=="1" (
-    msiexec /i "%NI%" /qn /norestart 2>nul
+    msiexec /i "%NODE_INSTALLER%" /qn /norestart 2>nul
 ) else (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process msiexec.exe -ArgumentList '/i','%NI%','/qn','/norestart' -Verb RunAs -Wait" 2>nul
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process msiexec.exe -ArgumentList '/i','%NODE_INSTALLER%','/qn','/norestart' -Verb RunAs -Wait" 2>nul
 )
+
 timeout /t 8 /nobreak >nul 2>&1
-del "%NI%" 2>nul
 call :refresh_path
+del "%NODE_INSTALLER%" 2>nul
 goto :eof
 
-
-:dl
+:: =============================================
+:: download_file  %1=URL  %2=SavePath
+:: Sets DL_OK=1 on success, DL_OK=0 on fail
+:: =============================================
+:download_file
 set "DL_OK=0"
-set "DU=%~1"
-set "DP=%~2"
+set "DL_URL=%~1"
+set "DL_PATH=%~2"
+
+:: Try curl
 where curl.exe >nul 2>&1
 if !ERRORLEVEL! equ 0 (
-    curl -fSL --connect-timeout 15 --max-time 300 --progress-bar -o "%DP%" "%DU%" 2>nul
+    curl -fSL --connect-timeout 15 --max-time 300 --progress-bar -o "%DL_PATH%" "%DL_URL%" 2>nul
     if !ERRORLEVEL! equ 0 (
-        if exist "%DP%" (
-            for %%A in ("%DP%") do if %%~zA GTR 100 set "DL_OK=1"
-            if "!DL_OK!"=="1" goto :eof
+        if exist "%DL_PATH%" (
+            for %%A in ("%DL_PATH%") do (
+                if %%~zA GTR 100 (
+                    set "DL_OK=1"
+                    goto :eof
+                )
+            )
         )
     )
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$ProgressPreference='SilentlyContinue';try{Invoke-WebRequest -Uri '%DU%' -OutFile '%DP%' -UseBasicParsing -TimeoutSec 300}catch{exit 1}" 2>nul
+
+:: Try PowerShell
+echo   Trying PowerShell download...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$ProgressPreference='SilentlyContinue';try{Invoke-WebRequest -Uri '%DL_URL%' -OutFile '%DL_PATH%' -UseBasicParsing -TimeoutSec 300}catch{exit 1}" 2>nul
 if !ERRORLEVEL! equ 0 (
-    if exist "%DP%" (
-        for %%A in ("%DP%") do if %%~zA GTR 100 set "DL_OK=1"
-        if "!DL_OK!"=="1" goto :eof
+    if exist "%DL_PATH%" (
+        for %%A in ("%DL_PATH%") do (
+            if %%~zA GTR 100 (
+                set "DL_OK=1"
+                goto :eof
+            )
+        )
     )
 )
-bitsadmin /transfer "ksilly" /download /priority foreground "%DU%" "%DP%" >nul 2>&1
-if exist "%DP%" (
-    for %%A in ("%DP%") do if %%~zA GTR 100 set "DL_OK=1"
+
+:: Try bitsadmin
+bitsadmin /transfer "ksilly_dl" /download /priority foreground "%DL_URL%" "%DL_PATH%" >nul 2>&1
+if !ERRORLEVEL! equ 0 (
+    if exist "%DL_PATH%" (
+        for %%A in ("%DL_PATH%") do (
+            if %%~zA GTR 100 (
+                set "DL_OK=1"
+                goto :eof
+            )
+        )
+    )
 )
 goto :eof
 
-
+:: =============================================
+:: refresh_path - reload PATH from registry
+:: =============================================
 :refresh_path
-for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "SP=%%b"
-for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "UP=%%b"
-if defined SP (
-    if defined UP (set "PATH=!SP!;!UP!") else (set "PATH=!SP!")
+for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do (
+    set "SYS_PATH=%%b"
 )
+for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do (
+    set "USR_PATH=%%b"
+)
+if defined SYS_PATH (
+    if defined USR_PATH (
+        set "PATH=!SYS_PATH!;!USR_PATH!"
+    ) else (
+        set "PATH=!SYS_PATH!"
+    )
+)
+:: Ensure common paths
 for %%p in (
     "%ProgramFiles%\Git\cmd"
     "%ProgramFiles%\Git\bin"
@@ -385,13 +576,15 @@ for %%p in (
 ) do (
     if exist "%%~p" (
         echo "!PATH!" | findstr /i /c:"%%~p" >nul 2>&1
-        if !ERRORLEVEL! neq 0 set "PATH=%%~p;!PATH!"
+        if !ERRORLEVEL! neq 0 (
+            set "PATH=%%~p;!PATH!"
+        )
     )
 )
 goto :eof
 
 
-:cleanup
+:eof_clean
 if exist "%TEMP_DIR%" rmdir /s /q "%TEMP_DIR%" 2>nul
 endlocal
 exit /b 0
