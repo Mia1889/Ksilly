@@ -32,9 +32,9 @@
 ## 🚀 快速开始
 
 ### 一键运行
-
+``
 bash <(curl -fsSL https://raw.githubusercontent.com/Mia1889/Ksilly/main/ksilly.sh)
 
 ### 大陆用户
-
+``
 bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/Mia1889/Ksilly/main/ksilly.sh)
