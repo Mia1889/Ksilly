@@ -1,211 +1,256 @@
 @echo off
-:: ============================================================
-::  Ksilly v2.0.0 - SillyTavern Windows 启动器
-::  自动检测 Git Bash / WSL 并运行 ksilly.sh
-::  仓库: https://github.com/Mia1889/Ksilly
-:: ============================================================
 chcp 65001 >nul 2>&1
 setlocal EnableDelayedExpansion
 
+:: ============================================================
+::  Ksilly v2.0.0 - SillyTavern Windows Launcher
+::  https://github.com/Mia1889/Ksilly
+:: ============================================================
+
 set "VER=2.0.0"
 set "REPO_RAW=https://raw.githubusercontent.com/Mia1889/Ksilly/main"
-set "PROXY=https://ghfast.top/"
+set "PROXY_1=https://ghfast.top/"
+set "PROXY_2=https://gh-proxy.com/"
 set "ST_DIR=%USERPROFILE%\SillyTavern"
 
 title Ksilly v%VER%
 cls
 echo.
-echo   ██╗  ██╗███████╗██╗██╗     ██╗  ██╗   ██╗
-echo   ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝
-echo   █████╔╝ ███████╗██║██║     ██║   ╚████╔╝
-echo   ██╔═██╗ ╚════██║██║██║     ██║    ╚██╔╝
-echo   ██║  ██╗███████║██║███████╗███████╗██║
-echo   ╚═╝  ╚═╝╚══════╝╚═╝╚══════╝╚══════╝╚═╝
+echo   ================================================================
 echo.
-echo   SillyTavern 部署脚本 v%VER%  [Windows]
-echo   ───────────────────────────────────────────
+echo    K S I L L Y   -   SillyTavern Launcher   v%VER%
+echo.
+echo    github.com/Mia1889/Ksilly
+echo.
+echo   ================================================================
 echo.
 
-:: ─────────────────────────────────────────
-:: 第一步: 查找 Bash 环境
-:: ─────────────────────────────────────────
-echo   [1/3] 检测运行环境...
+:: ============================================================
+:: STEP 1 - Find bash.exe (Git Bash)
+:: ============================================================
+echo   [1/3] Looking for Git Bash ...
 
 set "BASH_EXE="
 
-:: Git Bash 常见安装路径
-for %%p in (
-    "%ProgramFiles%\Git\bin\bash.exe"
-    "%ProgramFiles(x86)%\Git\bin\bash.exe"
-    "%LOCALAPPDATA%\Programs\Git\bin\bash.exe"
-    "%USERPROFILE%\AppData\Local\Programs\Git\bin\bash.exe"
-    "%USERPROFILE%\scoop\apps\git\current\bin\bash.exe"
-    "C:\Git\bin\bash.exe"
-) do (
-    if exist "%%~p" (
-        set "BASH_EXE=%%~p"
-        goto :found_bash
-    )
+:: --- Check common Git install paths ---
+if exist "%ProgramFiles%\Git\bin\bash.exe" (
+    set "BASH_EXE=%ProgramFiles%\Git\bin\bash.exe"
+    goto :found_bash
+)
+if exist "%ProgramFiles(x86)%\Git\bin\bash.exe" (
+    set "BASH_EXE=%ProgramFiles(x86)%\Git\bin\bash.exe"
+    goto :found_bash
+)
+if exist "%LOCALAPPDATA%\Programs\Git\bin\bash.exe" (
+    set "BASH_EXE=%LOCALAPPDATA%\Programs\Git\bin\bash.exe"
+    goto :found_bash
+)
+if exist "%USERPROFILE%\scoop\apps\git\current\bin\bash.exe" (
+    set "BASH_EXE=%USERPROFILE%\scoop\apps\git\current\bin\bash.exe"
+    goto :found_bash
+)
+if exist "C:\Git\bin\bash.exe" (
+    set "BASH_EXE=C:\Git\bin\bash.exe"
+    goto :found_bash
 )
 
-:: 从系统 PATH 查找 (排除 System32 下的 WSL bash)
+:: --- Search PATH (skip System32 WSL bash) ---
 for /f "tokens=* usebackq" %%i in (`where bash.exe 2^>nul`) do (
-    echo "%%i" | findstr /i "System32" >nul 2>&1
+    set "_BPATH=%%i"
+    echo "!_BPATH!" | findstr /i "System32" >nul 2>&1
     if !ERRORLEVEL! neq 0 (
         set "BASH_EXE=%%i"
         goto :found_bash
     )
 )
 
-:: ─── 没有 Git Bash, 尝试 WSL ───
+:: --- Try WSL ---
 where wsl.exe >nul 2>&1
 if !ERRORLEVEL! equ 0 (
-    echo   ^! 未找到 Git Bash, 检测到 WSL
-    echo   ^! SillyTavern 将安装在 WSL 环境内
     echo.
-    echo   正在启动 WSL...
+    echo   [!] Git Bash not found, but WSL detected.
+    echo   [!] Launching via WSL ...
     echo.
-    wsl -- bash -c "tmpf=\"/tmp/ksilly_$$.sh\"; curl -fsSL '%REPO_RAW%/ksilly.sh' -o \"$tmpf\" 2>/dev/null || curl -fsSL '%PROXY%%REPO_RAW%/ksilly.sh' -o \"$tmpf\" 2>/dev/null; if [ -s \"$tmpf\" ]; then bash \"$tmpf\"; else echo '下载失败'; fi; rm -f \"$tmpf\""
-    if !ERRORLEVEL! neq 0 (
-        echo.
-        echo   WSL 运行出错, 请确认 WSL 已正确安装
-        pause
-    )
+    wsl -- bash -c "curl -fsSL '%REPO_RAW%/ksilly.sh' -o /tmp/ksilly_wsl.sh 2>/dev/null || curl -fsSL '%PROXY_1%%REPO_RAW%/ksilly.sh' -o /tmp/ksilly_wsl.sh 2>/dev/null; if [ -s /tmp/ksilly_wsl.sh ]; then bash /tmp/ksilly_wsl.sh; else echo 'Download failed'; fi; rm -f /tmp/ksilly_wsl.sh"
     goto :eof_clean
 )
 
-:: ─── 什么都没有 ───
+:: --- Nothing found ---
 echo.
-echo   ┌─────────────────────────────────────────────┐
-echo   │         未找到 Git Bash 或 WSL               │
-echo   ├─────────────────────────────────────────────┤
-echo   │                                             │
-echo   │  请安装 Git for Windows:                    │
-echo   │                                             │
-echo   │    https://git-scm.com/download/win         │
-echo   │                                             │
-echo   │  安装时请确保勾选:                          │
-echo   │    [√] Git Bash Here                        │
-echo   │    [√] Use Git from Windows Command Line    │
-echo   │                                             │
-echo   │  安装完成后重新运行本文件即可               │
-echo   └─────────────────────────────────────────────┘
+echo   ================================================================
+echo.
+echo    ERROR: Git Bash not found
+echo.
+echo    Please install Git for Windows:
+echo.
+echo      https://git-scm.com/download/win
+echo.
+echo    During installation, make sure to check:
+echo.
+echo      [x] Git Bash Here
+echo      [x] Use Git from Windows Command Line
+echo.
+echo    After installation, run this file again.
+echo.
+echo   ================================================================
 echo.
 pause
 goto :eof_clean
 
 :found_bash
-echo   √ Git Bash: %BASH_EXE%
+echo   [OK] Found: %BASH_EXE%
 
-:: ─────────────────────────────────────────
-:: 第二步: 获取脚本
-:: ─────────────────────────────────────────
-echo   [2/3] 获取部署脚本...
+:: ============================================================
+:: STEP 2 - Download / update ksilly.sh
+:: ============================================================
+echo   [2/3] Getting deploy script ...
 
 if not exist "%ST_DIR%" mkdir "%ST_DIR%" 2>nul
 
 set "SH_FILE=%ST_DIR%\ksilly.sh"
-set "SH_TMP=%ST_DIR%\ksilly.sh.tmp"
+set "SH_TMP=%ST_DIR%\ksilly.sh.downloading"
 set "GOT_NEW=0"
 
-:: ── 尝试下载最新版 ──
-
-:: 方法 A: curl 直连 (Win10+ 自带 curl)
-curl -fsSL --connect-timeout 8 --max-time 30 "%REPO_RAW%/ksilly.sh" -o "%SH_TMP%" 2>nul
+:: --- Method A: curl direct ---
+where curl.exe >nul 2>&1
 if !ERRORLEVEL! equ 0 (
-    for %%A in ("%SH_TMP%") do if %%~zA GTR 1000 (
-        move /y "%SH_TMP%" "%SH_FILE%" >nul 2>&1
-        set "GOT_NEW=1"
-        echo   √ 已获取最新脚本
-    )
-)
-
-:: 方法 B: curl 代理
-if "!GOT_NEW!"=="0" (
-    echo   ^! 直连失败, 尝试加速通道...
-    curl -fsSL --connect-timeout 8 --max-time 30 "%PROXY%%REPO_RAW%/ksilly.sh" -o "%SH_TMP%" 2>nul
+    curl.exe -fsSL --connect-timeout 10 --max-time 60 "%REPO_RAW%/ksilly.sh" -o "%SH_TMP%" 2>nul
     if !ERRORLEVEL! equ 0 (
-        for %%A in ("%SH_TMP%") do if %%~zA GTR 1000 (
-            move /y "%SH_TMP%" "%SH_FILE%" >nul 2>&1
-            set "GOT_NEW=1"
-            echo   √ 已获取最新脚本 (加速)
+        if exist "%SH_TMP%" (
+            for %%A in ("%SH_TMP%") do (
+                if %%~zA GTR 1000 (
+                    move /y "%SH_TMP%" "%SH_FILE%" >nul 2>&1
+                    set "GOT_NEW=1"
+                    echo   [OK] Script downloaded (direct)
+                )
+            )
         )
     )
 )
 
-:: 方法 C: PowerShell 兜底
+:: --- Method B: curl proxy 1 ---
 if "!GOT_NEW!"=="0" (
-    echo   ^! curl 失败, 尝试 PowerShell...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$urls=@('%REPO_RAW%/ksilly.sh','%PROXY%%REPO_RAW%/ksilly.sh');foreach($u in $urls){try{(New-Object Net.WebClient).DownloadFile($u,'%SH_TMP%');break}catch{}}" 2>nul
-    if exist "%SH_TMP%" (
-        for %%A in ("%SH_TMP%") do if %%~zA GTR 1000 (
-            move /y "%SH_TMP%" "%SH_FILE%" >nul 2>&1
-            set "GOT_NEW=1"
-            echo   √ 已获取最新脚本 (PowerShell)
+    echo   [..] Direct failed, trying proxy ...
+    where curl.exe >nul 2>&1
+    if !ERRORLEVEL! equ 0 (
+        curl.exe -fsSL --connect-timeout 10 --max-time 60 "%PROXY_1%%REPO_RAW%/ksilly.sh" -o "%SH_TMP%" 2>nul
+        if !ERRORLEVEL! equ 0 (
+            if exist "%SH_TMP%" (
+                for %%A in ("%SH_TMP%") do (
+                    if %%~zA GTR 1000 (
+                        move /y "%SH_TMP%" "%SH_FILE%" >nul 2>&1
+                        set "GOT_NEW=1"
+                        echo   [OK] Script downloaded (proxy)
+                    )
+                )
+            )
         )
     )
 )
 
-:: 清理临时文件
-del "%SH_TMP%" 2>nul
+:: --- Method C: curl proxy 2 ---
+if "!GOT_NEW!"=="0" (
+    where curl.exe >nul 2>&1
+    if !ERRORLEVEL! equ 0 (
+        curl.exe -fsSL --connect-timeout 10 --max-time 60 "%PROXY_2%%REPO_RAW%/ksilly.sh" -o "%SH_TMP%" 2>nul
+        if !ERRORLEVEL! equ 0 (
+            if exist "%SH_TMP%" (
+                for %%A in ("%SH_TMP%") do (
+                    if %%~zA GTR 1000 (
+                        move /y "%SH_TMP%" "%SH_FILE%" >nul 2>&1
+                        set "GOT_NEW=1"
+                        echo   [OK] Script downloaded (proxy 2)
+                    )
+                )
+            )
+        )
+    )
+)
 
-:: 最终检查
+:: --- Method D: PowerShell fallback ---
+if "!GOT_NEW!"=="0" (
+    echo   [..] curl failed, trying PowerShell ...
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+        "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='%REPO_RAW%/ksilly.sh'; try{(New-Object Net.WebClient).DownloadFile($u,'%SH_TMP%')}catch{try{(New-Object Net.WebClient).DownloadFile('%PROXY_1%'+$u,'%SH_TMP%')}catch{}}" 2>nul
+    if exist "%SH_TMP%" (
+        for %%A in ("%SH_TMP%") do (
+            if %%~zA GTR 1000 (
+                move /y "%SH_TMP%" "%SH_FILE%" >nul 2>&1
+                set "GOT_NEW=1"
+                echo   [OK] Script downloaded (PowerShell)
+            )
+        )
+    )
+)
+
+:: --- Cleanup temp ---
+if exist "%SH_TMP%" del "%SH_TMP%" 2>nul
+
+:: --- Final check ---
 if not exist "%SH_FILE%" (
     echo.
-    echo   × 获取脚本失败且无本地缓存
-    echo     请检查网络连接后重试
+    echo   [ERROR] Failed to download script and no local cache.
+    echo           Please check your network connection.
+    echo.
+    echo   You can also try downloading manually:
+    echo     %REPO_RAW%/ksilly.sh
     echo.
     pause
     goto :eof_clean
 )
 
 if "!GOT_NEW!"=="0" (
-    echo   ^! 下载失败, 使用本地缓存
+    echo   [!] Download failed, using local cache
 )
 
-:: ─────────────────────────────────────────
-:: 保存 BAT 自身到 SillyTavern 目录
-:: ─────────────────────────────────────────
+:: ============================================================
+:: Save this .bat to SillyTavern dir
+:: ============================================================
+set "BAT_SELF=%~f0"
 set "BAT_DEST=%ST_DIR%\ksilly.bat"
-if not "%~f0"=="%BAT_DEST%" (
-    copy /y "%~f0" "%BAT_DEST%" >nul 2>&1
+
+:: Only copy if not already running from there
+if not "%BAT_SELF%"=="%BAT_DEST%" (
+    copy /y "%BAT_SELF%" "%BAT_DEST%" >nul 2>&1
     if !ERRORLEVEL! equ 0 (
-        echo   √ 启动器已保存: %BAT_DEST%
-        echo     (下次可直接双击运行^)
+        echo   [OK] Launcher saved to: %BAT_DEST%
     )
 )
 
-:: ─────────────────────────────────────────
-:: 第三步: 通过 Git Bash 运行
-:: ─────────────────────────────────────────
-echo   [3/3] 启动 Ksilly...
-echo   ───────────────────────────────────────────
+:: ============================================================
+:: STEP 3 - Launch via Git Bash
+:: ============================================================
+echo   [3/3] Launching Ksilly ...
+echo.
+echo   ================================================================
 echo.
 
-:: 将 Windows 反斜杠路径转为正斜杠 (Git Bash 兼容)
+:: Convert backslash to forward slash for bash
 set "SH_UNIX=%SH_FILE:\=/%"
 
-:: 收集传入参数
+:: Collect arguments
 set "PASS_ARGS="
+set "HAS_ARGS=0"
 if not "%~1"=="" (
     set "PASS_ARGS=%*"
+    set "HAS_ARGS=1"
 )
 
-:: 启动 Git Bash (--login 确保 PATH 包含 node/npm)
-if defined PASS_ARGS (
-    "%BASH_EXE%" --login -c "bash '%SH_UNIX%' !PASS_ARGS!"
+:: Launch Git Bash
+if "!HAS_ARGS!"=="1" (
+    "%BASH_EXE%" --login -c "cd ~ ; bash '%SH_UNIX%' %PASS_ARGS%"
 ) else (
-    "%BASH_EXE%" --login -c "bash '%SH_UNIX%'"
+    "%BASH_EXE%" --login -c "cd ~ ; bash '%SH_UNIX%'"
 )
 
-:: 脚本退出后
-set "EXIT_CODE=!ERRORLEVEL!"
-if !EXIT_CODE! neq 0 (
-    echo.
-    echo   脚本退出代码: !EXIT_CODE!
-    pause
+set "ECODE=!ERRORLEVEL!"
+
+echo.
+if !ECODE! neq 0 (
+    echo   Script exited with code: !ECODE!
 )
+echo   Press any key to close ...
+pause >nul
 
 :eof_clean
 endlocal
