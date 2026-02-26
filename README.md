@@ -35,3 +35,8 @@
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/Mia1889/Ksilly/main/ksilly.sh)
+
+### 大陆用户
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Mia1889/Ksilly/main/ksilly.sh)
