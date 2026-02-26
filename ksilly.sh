@@ -28,12 +28,19 @@ GITHUB_PROXIES=(
 )
 
 # ==================== 插件定义 ====================
-# 格式: "目录名|显示名|GitHub地址|大陆镜像地址"
-PLUGIN_LIST=(
-    "JS-Slash-Runner|酒馆助手|https://github.com/N0VI028/JS-Slash-Runner.git|https://gitlab.com/novi028/JS-Slash-Runner.git"
-    "ST-Prompt-Template|提示词模板|https://github.com/zonde306/ST-Prompt-Template.git|https://codeberg.org/zonde306/ST-Prompt-Template.git"
-)
-EXTENSIONS_SUBDIR="data/default-user/extensions/third-party"
+PLUGIN_DIR_NAME="public/scripts/extensions/third-party"
+
+# 插件1: 酒馆助手
+PLUGIN_1_NAME="酒馆助手 (JS-Slash-Runner)"
+PLUGIN_1_FOLDER="JS-Slash-Runner"
+PLUGIN_1_REPO_INTL="https://github.com/N0VI028/JS-Slash-Runner.git"
+PLUGIN_1_REPO_CN="https://gitlab.com/novi028/JS-Slash-Runner"
+
+# 插件2: 提示词模板
+PLUGIN_2_NAME="提示词模板 (ST-Prompt-Template)"
+PLUGIN_2_FOLDER="ST-Prompt-Template"
+PLUGIN_2_REPO_INTL="https://github.com/zonde306/ST-Prompt-Template.git"
+PLUGIN_2_REPO_CN="https://codeberg.org/zonde306/ST-Prompt-Template.git"
 
 # ==================== 颜色定义 ====================
 RED='\033[0;31m'
@@ -58,7 +65,6 @@ CURRENT_USER=$(whoami)
 NEED_SUDO=""
 UPDATE_BEHIND=0
 CACHED_PUBLIC_IP=""
-NETWORK_DETECTED=false
 
 # ==================== 旋转动画 ====================
 
@@ -364,9 +370,6 @@ load_config() {
     if [[ -f "$KSILLY_CONF" ]]; then
         source "$KSILLY_CONF" 2>/dev/null || true
         INSTALL_DIR="${KSILLY_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
-        IS_CHINA="${KSILLY_IS_CHINA:-false}"
-        GITHUB_PROXY="${KSILLY_GITHUB_PROXY:-}"
-        [[ "$IS_CHINA" == "true" ]] && NETWORK_DETECTED=true
     else
         INSTALL_DIR="$DEFAULT_INSTALL_DIR"
     fi
@@ -471,16 +474,6 @@ detect_os() {
 }
 
 detect_network() {
-    # 避免重复检测
-    if [[ "$NETWORK_DETECTED" == true ]]; then
-        if [[ "$IS_CHINA" == true ]]; then
-            info "网络环境: 大陆 (已缓存)"
-        else
-            info "网络环境: 国际 (已缓存)"
-        fi
-        return
-    fi
-
     step "帮杂鱼看看网络环境~"
 
     local china_test=false
@@ -504,15 +497,6 @@ detect_network() {
     else
         IS_CHINA=false
         info "能直连 GitHub~运气不错嘛杂鱼♡"
-    fi
-
-    NETWORK_DETECTED=true
-    save_config
-}
-
-ensure_network_detected() {
-    if [[ "$NETWORK_DETECTED" != true ]]; then
-        detect_network
     fi
 }
 
@@ -932,6 +916,350 @@ remove_firewall_port() {
     fi
 }
 
+# ==================== 插件管理 ====================
+
+get_plugin_dir() {
+    echo "$INSTALL_DIR/$PLUGIN_DIR_NAME"
+}
+
+is_plugin_installed() {
+    local folder="$1"
+    local plugin_path="$(get_plugin_dir)/$folder"
+    [[ -d "$plugin_path" && "$(ls -A "$plugin_path" 2>/dev/null)" ]]
+}
+
+get_plugin_version() {
+    local folder="$1"
+    local plugin_path="$(get_plugin_dir)/$folder"
+
+    if [[ -f "$plugin_path/manifest.json" ]]; then
+        local ver
+        ver=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$plugin_path/manifest.json" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+        [[ -n "$ver" ]] && echo "$ver" && return
+    fi
+
+    if [[ -f "$plugin_path/package.json" ]]; then
+        local ver
+        ver=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$plugin_path/package.json" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+        [[ -n "$ver" ]] && echo "$ver" && return
+    fi
+
+    if [[ -d "$plugin_path/.git" ]]; then
+        local hash
+        hash=$(cd "$plugin_path" && git rev-parse --short HEAD 2>/dev/null)
+        [[ -n "$hash" ]] && echo "git:$hash" && return
+    fi
+
+    echo "已安装"
+}
+
+install_single_plugin() {
+    local name="$1"
+    local folder="$2"
+    local repo_intl="$3"
+    local repo_cn="$4"
+
+    local plugin_base
+    plugin_base=$(get_plugin_dir)
+
+    mkdir -p "$plugin_base"
+
+    local target_path="$plugin_base/$folder"
+
+    if is_plugin_installed "$folder"; then
+        warn "${name} 已经装过了哦~♡"
+        echo -e "    当前版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
+        echo ""
+        if confirm "要删掉重装吗~杂鱼♡"; then
+            spin "删除旧版 ${name} 中~♡" rm -rf "$target_path"
+        else
+            info "那就不动了~♡"
+            return 0
+        fi
+    fi
+
+    local repo_url
+    if [[ "$IS_CHINA" == true ]]; then
+        repo_url="$repo_cn"
+        info "大陆网络~用镜像源安装♡"
+    else
+        repo_url="$repo_intl"
+        info "国际网络~直连安装♡"
+    fi
+
+    echo -e "    仓库: ${DIM}${repo_url}${NC}"
+
+    if spin "克隆 ${name} 中~杂鱼等等♡" git clone --depth 1 "$repo_url" "$target_path"; then
+        success "${name} 安装好了~♡"
+        echo -e "    版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
+        echo -e "    路径: ${DIM}${target_path}${NC}"
+        return 0
+    fi
+
+    # 第一源失败，尝试备用源
+    warn "第一个源失败了~换一个试试♡"
+    local fallback_url
+    if [[ "$IS_CHINA" == true ]]; then
+        fallback_url=$(get_github_url "$repo_intl")
+    else
+        fallback_url="$repo_cn"
+    fi
+
+    echo -e "    备用: ${DIM}${fallback_url}${NC}"
+
+    if spin "用备用源克隆 ${name} 中~♡" git clone --depth 1 "$fallback_url" "$target_path"; then
+        success "${name} 安装好了~(用的备用源) ♡"
+        echo -e "    版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
+        return 0
+    fi
+
+    error "${name} 装不上~两个源都挂了杂鱼检查网络吧♡"
+    return 1
+}
+
+uninstall_single_plugin() {
+    local name="$1"
+    local folder="$2"
+
+    if ! is_plugin_installed "$folder"; then
+        info "${name} 本来就没装~杂鱼瞎操心♡"
+        return 0
+    fi
+
+    local target_path="$(get_plugin_dir)/$folder"
+    echo -e "    版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
+    echo -e "    路径: ${DIM}${target_path}${NC}"
+    echo ""
+
+    if confirm "确定删掉 ${name} 吗~♡"; then
+        spin "删除 ${name} 中~♡" rm -rf "$target_path"
+        success "${name} 删掉了~♡"
+    else
+        info "那就留着吧~♡"
+    fi
+}
+
+update_single_plugin() {
+    local name="$1"
+    local folder="$2"
+    local repo_intl="$3"
+    local repo_cn="$4"
+
+    if ! is_plugin_installed "$folder"; then
+        warn "${name} 还没装呢~要不要先装一个♡"
+        if confirm "现在安装~♡"; then
+            install_single_plugin "$name" "$folder" "$repo_intl" "$repo_cn"
+        fi
+        return
+    fi
+
+    local target_path="$(get_plugin_dir)/$folder"
+
+    if [[ ! -d "$target_path/.git" ]]; then
+        warn "${name} 不是用 git 装的~没法更新♡"
+        if confirm "要删了重装吗~杂鱼♡"; then
+            spin "删除旧版中~♡" rm -rf "$target_path"
+            install_single_plugin "$name" "$folder" "$repo_intl" "$repo_cn"
+        fi
+        return
+    fi
+
+    echo -e "    当前版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
+
+    # 设置正确的远程 URL
+    local repo_url
+    if [[ "$IS_CHINA" == true ]]; then
+        repo_url="$repo_cn"
+    else
+        repo_url="$repo_intl"
+    fi
+
+    cd "$target_path"
+    git remote set-url origin "$repo_url" 2>/dev/null
+
+    if spin "拉取 ${name} 更新中~♡" git pull --ff-only; then
+        success "${name} 更新好了~♡"
+        echo -e "    新版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
+    else
+        warn "快速合并失败~强制更新♡"
+        local branch
+        branch=$(git branch --show-current 2>/dev/null || echo "main")
+        if spin_cmd "强制更新 ${name}~♡" "cd '$target_path' && git fetch --all 2>/dev/null && git reset --hard 'origin/$branch' 2>/dev/null"; then
+            success "${name} 强制更新好了~♡"
+            echo -e "    新版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
+        else
+            error "${name} 更新失败了~杂鱼的网络有问题♡"
+        fi
+    fi
+
+    cd - >/dev/null
+}
+
+plugin_menu() {
+    if ! check_installed; then
+        error "SillyTavern 都还没装呢~装什么插件杂鱼♡"
+        return 1
+    fi
+
+    # 检测网络（如果还没检测过）
+    if [[ -z "$GITHUB_PROXY" && "$IS_CHINA" == false ]]; then
+        # 尝试从配置加载
+        if [[ -f "$KSILLY_CONF" ]]; then
+            source "$KSILLY_CONF" 2>/dev/null || true
+            IS_CHINA="${KSILLY_IS_CHINA:-false}"
+            GITHUB_PROXY="${KSILLY_GITHUB_PROXY:-}"
+        fi
+    fi
+
+    while true; do
+        print_banner
+
+        echo -e "  ${BOLD}${PINK}插件管理~给杂鱼的酒馆加点料♡${NC}"
+        divider
+        echo ""
+
+        # 显示插件状态
+        echo -e "  ${BOLD}已收录插件${NC}"
+        echo ""
+
+        # 插件1状态
+        if is_plugin_installed "$PLUGIN_1_FOLDER"; then
+            local p1_ver
+            p1_ver=$(get_plugin_version "$PLUGIN_1_FOLDER")
+            echo -e "    ${GREEN}●${NC} ${PLUGIN_1_NAME}"
+            echo -e "      ${DIM}版本: ${p1_ver}${NC}"
+        else
+            echo -e "    ${DIM}○${NC} ${PLUGIN_1_NAME}"
+            echo -e "      ${DIM}未安装${NC}"
+        fi
+        echo ""
+
+        # 插件2状态
+        if is_plugin_installed "$PLUGIN_2_FOLDER"; then
+            local p2_ver
+            p2_ver=$(get_plugin_version "$PLUGIN_2_FOLDER")
+            echo -e "    ${GREEN}●${NC} ${PLUGIN_2_NAME}"
+            echo -e "      ${DIM}版本: ${p2_ver}${NC}"
+        else
+            echo -e "    ${DIM}○${NC} ${PLUGIN_2_NAME}"
+            echo -e "      ${DIM}未安装${NC}"
+        fi
+
+        echo ""
+        divider
+        echo ""
+        echo -e "  ${BOLD}安装插件${NC}"
+        echo -e "    ${GREEN}1)${NC} 安装 ${PLUGIN_1_NAME}"
+        echo -e "    ${GREEN}2)${NC} 安装 ${PLUGIN_2_NAME}"
+        echo -e "    ${GREEN}3)${NC} 全部安装"
+        echo ""
+        echo -e "  ${BOLD}更新插件${NC}"
+        echo -e "    ${GREEN}4)${NC} 更新 ${PLUGIN_1_NAME}"
+        echo -e "    ${GREEN}5)${NC} 更新 ${PLUGIN_2_NAME}"
+        echo -e "    ${GREEN}6)${NC} 全部更新"
+        echo ""
+        echo -e "  ${BOLD}卸载插件${NC}"
+        echo -e "    ${GREEN}7)${NC} 卸载 ${PLUGIN_1_NAME}"
+        echo -e "    ${GREEN}8)${NC} 卸载 ${PLUGIN_2_NAME}"
+        echo -e "    ${GREEN}9)${NC} 全部卸载"
+        echo ""
+        echo -e "    ${RED}0)${NC} 返回主菜单~♡"
+        echo ""
+        divider
+
+        local choice
+        choice=$(read_input "杂鱼想装什么~")
+
+        local need_restart=false
+
+        case "$choice" in
+            1)
+                echo ""
+                step "安装 ${PLUGIN_1_NAME}~♡"
+                install_single_plugin "$PLUGIN_1_NAME" "$PLUGIN_1_FOLDER" "$PLUGIN_1_REPO_INTL" "$PLUGIN_1_REPO_CN" && need_restart=true
+                ;;
+            2)
+                echo ""
+                step "安装 ${PLUGIN_2_NAME}~♡"
+                install_single_plugin "$PLUGIN_2_NAME" "$PLUGIN_2_FOLDER" "$PLUGIN_2_REPO_INTL" "$PLUGIN_2_REPO_CN" && need_restart=true
+                ;;
+            3)
+                echo ""
+                step "全部安装~一步到位♡"
+                echo ""
+                echo -e "  ${PINK}[1/2]${NC} ${PLUGIN_1_NAME}"
+                install_single_plugin "$PLUGIN_1_NAME" "$PLUGIN_1_FOLDER" "$PLUGIN_1_REPO_INTL" "$PLUGIN_1_REPO_CN" && need_restart=true
+                echo ""
+                echo -e "  ${PINK}[2/2]${NC} ${PLUGIN_2_NAME}"
+                install_single_plugin "$PLUGIN_2_NAME" "$PLUGIN_2_FOLDER" "$PLUGIN_2_REPO_INTL" "$PLUGIN_2_REPO_CN" && need_restart=true
+                echo ""
+                success "全部装好了~杂鱼可以去酒馆里看看了♡"
+                ;;
+            4)
+                echo ""
+                step "更新 ${PLUGIN_1_NAME}~♡"
+                update_single_plugin "$PLUGIN_1_NAME" "$PLUGIN_1_FOLDER" "$PLUGIN_1_REPO_INTL" "$PLUGIN_1_REPO_CN" && need_restart=true
+                ;;
+            5)
+                echo ""
+                step "更新 ${PLUGIN_2_NAME}~♡"
+                update_single_plugin "$PLUGIN_2_NAME" "$PLUGIN_2_FOLDER" "$PLUGIN_2_REPO_INTL" "$PLUGIN_2_REPO_CN" && need_restart=true
+                ;;
+            6)
+                echo ""
+                step "全部更新~♡"
+                echo ""
+                echo -e "  ${PINK}[1/2]${NC} ${PLUGIN_1_NAME}"
+                update_single_plugin "$PLUGIN_1_NAME" "$PLUGIN_1_FOLDER" "$PLUGIN_1_REPO_INTL" "$PLUGIN_1_REPO_CN" && need_restart=true
+                echo ""
+                echo -e "  ${PINK}[2/2]${NC} ${PLUGIN_2_NAME}"
+                update_single_plugin "$PLUGIN_2_NAME" "$PLUGIN_2_FOLDER" "$PLUGIN_2_REPO_INTL" "$PLUGIN_2_REPO_CN" && need_restart=true
+                echo ""
+                success "全部更新好了~♡"
+                ;;
+            7)
+                echo ""
+                step "卸载 ${PLUGIN_1_NAME}~♡"
+                uninstall_single_plugin "$PLUGIN_1_NAME" "$PLUGIN_1_FOLDER" && need_restart=true
+                ;;
+            8)
+                echo ""
+                step "卸载 ${PLUGIN_2_NAME}~♡"
+                uninstall_single_plugin "$PLUGIN_2_NAME" "$PLUGIN_2_FOLDER" && need_restart=true
+                ;;
+            9)
+                echo ""
+                step "全部卸载~♡"
+                if confirm "真的要把插件全删了吗~杂鱼♡"; then
+                    echo ""
+                    uninstall_single_plugin "$PLUGIN_1_NAME" "$PLUGIN_1_FOLDER" && need_restart=true
+                    echo ""
+                    uninstall_single_plugin "$PLUGIN_2_NAME" "$PLUGIN_2_FOLDER" && need_restart=true
+                    echo ""
+                    success "全删干净了~♡"
+                fi
+                ;;
+            0)
+                return 0
+                ;;
+            *)
+                warn "没这个选项~杂鱼眼花了吗♡"
+                ;;
+        esac
+
+        # 安装/卸载/更新后提示重启
+        if [[ "$need_restart" == true ]] && is_running; then
+            echo ""
+            warn "插件变动后重启一下 SillyTavern 才能生效哦~♡"
+            if confirm "现在重启~♡"; then
+                restart_sillytavern
+            fi
+        fi
+
+        pause_key
+    done
+}
+
 # ==================== SillyTavern 核心操作 ====================
 
 clone_sillytavern() {
@@ -1019,6 +1347,7 @@ configure_sillytavern() {
     echo -e "  ${BOLD}${PINK}配置向导 ~跟着人家选就行了杂鱼♡${NC}"
     divider
 
+    # --- 监听设置 ---
     echo ""
     echo -e "  ${BOLD}1. 监听模式${NC}"
     echo -e "     ${DIM}开了的话局域网和外网设备都能访问哦~${NC}"
@@ -1035,6 +1364,7 @@ configure_sillytavern() {
         info "只能本机访问~♡"
     fi
 
+    # --- 端口 ---
     echo ""
     echo -e "  ${BOLD}2. 端口设置${NC}"
     local port
@@ -1047,6 +1377,7 @@ configure_sillytavern() {
         port="8000"
     fi
 
+    # --- 白名单 ---
     echo ""
     echo -e "  ${BOLD}3. 白名单模式${NC}"
     echo -e "     ${DIM}开了的话只有白名单里的 IP 才能访问~${NC}"
@@ -1060,6 +1391,7 @@ configure_sillytavern() {
         info "白名单开着~安全第一♡"
     fi
 
+    # --- 基础认证 ---
     echo ""
     echo -e "  ${BOLD}4. 基础认证 (HTTP Auth)${NC}"
     echo -e "     ${DIM}访问的时候要输用户名密码~${NC}"
@@ -1099,6 +1431,7 @@ EOF
         info "不设认证啊~胆子挺大的杂鱼♡"
     fi
 
+    # --- 防火墙 ---
     if [[ "$listen_enabled" == true ]]; then
         echo ""
         open_firewall_port "$port"
@@ -1132,376 +1465,6 @@ setup_background() {
             pm2_setup_autostart
         fi
     fi
-}
-
-# ==================== 插件管理 ====================
-
-# 获取所有用户的插件目录
-get_all_extension_dirs() {
-    local base="$INSTALL_DIR/data"
-    local dirs=()
-
-    if [[ -d "$base" ]]; then
-        for user_dir in "$base"/*/; do
-            [[ -d "$user_dir" ]] && dirs+=("${user_dir}extensions/third-party")
-        done
-    fi
-
-    # 如果找不到任何用户目录，用 default-user
-    if [[ ${#dirs[@]} -eq 0 ]]; then
-        dirs=("$base/default-user/extensions/third-party")
-    fi
-
-    echo "${dirs[@]}"
-}
-
-# 解析插件定义字段
-plugin_field() {
-    local entry="$1" field="$2"
-    echo "$entry" | cut -d'|' -f"$field"
-}
-
-# 检查插件是否已安装 (检查第一个用户目录即可)
-is_plugin_installed() {
-    local dir_name="$1"
-    local ext_dirs
-    read -ra ext_dirs <<< "$(get_all_extension_dirs)"
-
-    [[ -d "${ext_dirs[0]}/${dir_name}" && -d "${ext_dirs[0]}/${dir_name}/.git" ]]
-}
-
-# 获取插件版本 (最近 commit 的短 hash)
-get_plugin_version() {
-    local dir_name="$1"
-    local ext_dirs
-    read -ra ext_dirs <<< "$(get_all_extension_dirs)"
-    local plugin_path="${ext_dirs[0]}/${dir_name}"
-
-    if [[ -d "$plugin_path/.git" ]]; then
-        git -C "$plugin_path" log -1 --format="%h" 2>/dev/null || echo "未知"
-    else
-        echo "未知"
-    fi
-}
-
-# 获取插件的正确 URL
-get_plugin_url() {
-    local github_url="$1"
-    local china_url="$2"
-
-    if [[ "$IS_CHINA" == true ]]; then
-        echo "$china_url"
-    else
-        echo "$github_url"
-    fi
-}
-
-# 安装单个插件
-install_single_plugin() {
-    local entry="$1"
-    local dir_name display_name github_url china_url
-    dir_name=$(plugin_field "$entry" 1)
-    display_name=$(plugin_field "$entry" 2)
-    github_url=$(plugin_field "$entry" 3)
-    china_url=$(plugin_field "$entry" 4)
-
-    local clone_url
-    clone_url=$(get_plugin_url "$github_url" "$china_url")
-
-    local ext_dirs
-    read -ra ext_dirs <<< "$(get_all_extension_dirs)"
-
-    local installed_count=0
-    local failed=false
-
-    for ext_dir in "${ext_dirs[@]}"; do
-        mkdir -p "$ext_dir"
-        local target="${ext_dir}/${dir_name}"
-
-        if [[ -d "$target" ]]; then
-            info "${display_name} 在 $(basename "$(dirname "$(dirname "$ext_dir")")") 已存在~跳过♡"
-            ((installed_count++))
-            continue
-        fi
-
-        if spin "给 $(basename "$(dirname "$(dirname "$ext_dir")")") 装 ${display_name} 中~♡" git clone --depth 1 "$clone_url" "$target"; then
-            ((installed_count++))
-        else
-            # 大陆镜像失败时尝试 GitHub 直连
-            if [[ "$IS_CHINA" == true && "$clone_url" != "$github_url" ]]; then
-                warn "镜像挂了~试试直连 GitHub♡"
-                if spin "直连克隆 ${display_name} 中~♡" git clone --depth 1 "$github_url" "$target"; then
-                    ((installed_count++))
-                else
-                    failed=true
-                fi
-            else
-                failed=true
-            fi
-        fi
-    done
-
-    if [[ "$failed" == true ]]; then
-        error "${display_name} 有部分安装失败了~杂鱼检查网络♡"
-        return 1
-    else
-        success "${display_name} 装好了~(${installed_count} 个用户目录) ♡"
-        return 0
-    fi
-}
-
-# 更新单个插件
-update_single_plugin() {
-    local entry="$1"
-    local dir_name display_name
-    dir_name=$(plugin_field "$entry" 1)
-    display_name=$(plugin_field "$entry" 2)
-
-    local ext_dirs
-    read -ra ext_dirs <<< "$(get_all_extension_dirs)"
-
-    local updated=false
-
-    for ext_dir in "${ext_dirs[@]}"; do
-        local target="${ext_dir}/${dir_name}"
-        if [[ -d "$target/.git" ]]; then
-            if spin "更新 ${display_name} ($(basename "$(dirname "$(dirname "$ext_dir")")")) 中~♡" git -C "$target" pull --ff-only; then
-                updated=true
-            else
-                warn "$(basename "$(dirname "$(dirname "$ext_dir")")") 的 ${display_name} 更新失败~♡"
-                # 尝试强制更新
-                spin_cmd "强制更新中~♡" "cd '$target' && git fetch --all && git reset --hard origin/\$(git branch --show-current)"
-                updated=true
-            fi
-        fi
-    done
-
-    if [[ "$updated" == true ]]; then
-        success "${display_name} 更新好了~♡"
-    else
-        warn "${display_name} 没找到可更新的安装~♡"
-    fi
-}
-
-# 卸载单个插件
-uninstall_single_plugin() {
-    local entry="$1"
-    local dir_name display_name
-    dir_name=$(plugin_field "$entry" 1)
-    display_name=$(plugin_field "$entry" 2)
-
-    local ext_dirs
-    read -ra ext_dirs <<< "$(get_all_extension_dirs)"
-
-    local removed=false
-
-    for ext_dir in "${ext_dirs[@]}"; do
-        local target="${ext_dir}/${dir_name}"
-        if [[ -d "$target" ]]; then
-            rm -rf "$target"
-            removed=true
-        fi
-    done
-
-    if [[ "$removed" == true ]]; then
-        success "${display_name} 删掉了~♡"
-    else
-        info "${display_name} 本来就没装~♡"
-    fi
-}
-
-# 插件管理菜单
-plugin_menu() {
-    if ! check_installed; then
-        error "SillyTavern 都还没装呢~装什么插件杂鱼♡"
-        return 1
-    fi
-
-    ensure_network_detected
-
-    while true; do
-        print_banner
-
-        echo -e "  ${BOLD}${PINK}插件管理~帮杂鱼装点好东西♡${NC}"
-        divider
-        echo ""
-
-        # 显示插件状态
-        echo -e "  ${BOLD}插件列表${NC}"
-        echo ""
-
-        local idx=0
-        for entry in "${PLUGIN_LIST[@]}"; do
-            ((idx++))
-            local dir_name display_name
-            dir_name=$(plugin_field "$entry" 1)
-            display_name=$(plugin_field "$entry" 2)
-
-            if is_plugin_installed "$dir_name"; then
-                local ver
-                ver=$(get_plugin_version "$dir_name")
-                echo -e "    ${GREEN}●${NC} ${idx}. ${BOLD}${display_name}${NC} ${DIM}(${dir_name})${NC}"
-                echo -e "       ${GREEN}已安装${NC} ${DIM}commit: ${ver}${NC}"
-            else
-                echo -e "    ${DIM}○${NC} ${idx}. ${BOLD}${display_name}${NC} ${DIM}(${dir_name})${NC}"
-                echo -e "       ${DIM}未安装${NC}"
-            fi
-            echo ""
-        done
-
-        divider
-        echo ""
-        echo -e "  ${GREEN}1)${NC} 安装/更新 酒馆助手"
-        echo -e "  ${GREEN}2)${NC} 安装/更新 提示词模板"
-        echo -e "  ${GREEN}3)${NC} 一键安装全部插件"
-        echo -e "  ${GREEN}4)${NC} 一键更新全部插件"
-        echo -e "  ${GREEN}5)${NC} 卸载插件"
-        echo ""
-        echo -e "  ${RED}0)${NC} 返回主菜单~♡"
-        echo ""
-        divider
-
-        local choice
-        choice=$(read_input "杂鱼想装什么~")
-
-        case "$choice" in
-            1)
-                echo ""
-                local entry="${PLUGIN_LIST[0]}"
-                local dir_name
-                dir_name=$(plugin_field "$entry" 1)
-
-                if is_plugin_installed "$dir_name"; then
-                    info "酒馆助手已经装了~帮你更新一下♡"
-                    update_single_plugin "$entry"
-                else
-                    install_single_plugin "$entry"
-                fi
-                ;;
-            2)
-                echo ""
-                local entry="${PLUGIN_LIST[1]}"
-                local dir_name
-                dir_name=$(plugin_field "$entry" 1)
-
-                if is_plugin_installed "$dir_name"; then
-                    info "提示词模板已经装了~帮你更新一下♡"
-                    update_single_plugin "$entry"
-                else
-                    install_single_plugin "$entry"
-                fi
-                ;;
-            3)
-                echo ""
-                step "全部安装~人家一个个帮你装♡"
-                for entry in "${PLUGIN_LIST[@]}"; do
-                    local dir_name
-                    dir_name=$(plugin_field "$entry" 1)
-                    echo ""
-                    if is_plugin_installed "$dir_name"; then
-                        info "$(plugin_field "$entry" 2) 已经有了~跳过♡"
-                    else
-                        install_single_plugin "$entry"
-                    fi
-                done
-                echo ""
-                success "全部装好了~杂鱼满意了吗♡"
-                ;;
-            4)
-                echo ""
-                step "全部更新~♡"
-                for entry in "${PLUGIN_LIST[@]}"; do
-                    local dir_name
-                    dir_name=$(plugin_field "$entry" 1)
-                    echo ""
-                    if is_plugin_installed "$dir_name"; then
-                        update_single_plugin "$entry"
-                    else
-                        warn "$(plugin_field "$entry" 2) 没装呢~跳过♡"
-                    fi
-                done
-                echo ""
-                success "能更新的都更新了~♡"
-                ;;
-            5)
-                echo ""
-                echo -e "  ${BOLD}要卸载哪个~♡${NC}"
-                echo ""
-
-                local has_installed=false
-                local uidx=0
-                for entry in "${PLUGIN_LIST[@]}"; do
-                    ((uidx++))
-                    local dir_name display_name
-                    dir_name=$(plugin_field "$entry" 1)
-                    display_name=$(plugin_field "$entry" 2)
-                    if is_plugin_installed "$dir_name"; then
-                        echo -e "    ${RED}${uidx})${NC} ${display_name}"
-                        has_installed=true
-                    fi
-                done
-
-                if [[ "$has_installed" == false ]]; then
-                    info "一个插件都没装~卸什么卸杂鱼♡"
-                else
-                    echo -e "    ${RED}a)${NC} 全部卸载"
-                    echo ""
-
-                    local del_choice
-                    del_choice=$(read_input "选择~")
-
-                    case "$del_choice" in
-                        1)
-                            if is_plugin_installed "$(plugin_field "${PLUGIN_LIST[0]}" 1)"; then
-                                if confirm "删掉酒馆助手~♡"; then
-                                    uninstall_single_plugin "${PLUGIN_LIST[0]}"
-                                fi
-                            else
-                                info "酒馆助手没装~♡"
-                            fi
-                            ;;
-                        2)
-                            if is_plugin_installed "$(plugin_field "${PLUGIN_LIST[1]}" 1)"; then
-                                if confirm "删掉提示词模板~♡"; then
-                                    uninstall_single_plugin "${PLUGIN_LIST[1]}"
-                                fi
-                            else
-                                info "提示词模板没装~♡"
-                            fi
-                            ;;
-                        [aA])
-                            if confirm "全部删掉~杂鱼确定♡"; then
-                                for entry in "${PLUGIN_LIST[@]}"; do
-                                    uninstall_single_plugin "$entry"
-                                done
-                                success "全删光了~♡"
-                            fi
-                            ;;
-                        *)
-                            warn "没这个选项~♡"
-                            ;;
-                    esac
-                fi
-                ;;
-            0)
-                return 0
-                ;;
-            *)
-                warn "没这个选项~杂鱼看清楚再选♡"
-                ;;
-        esac
-
-        # 修改插件后提示重启
-        if [[ "$choice" =~ ^[1-4]$ ]] && is_running; then
-            echo ""
-            warn "装了新插件要重启酒馆才能用哦~♡"
-            if confirm "现在重启~♡"; then
-                restart_sillytavern
-            fi
-        fi
-
-        pause_key
-    done
 }
 
 # ==================== 启动/停止 ====================
@@ -1609,22 +1572,23 @@ show_status() {
 
     echo ""
 
-    # 插件状态
-    echo -e "  ${BOLD}已装插件~♡${NC}"
+    # 插件信息
+    echo -e "  ${BOLD}已安装插件~♡${NC}"
     divider
-    local has_plugins=false
-    for entry in "${PLUGIN_LIST[@]}"; do
-        local dir_name display_name
-        dir_name=$(plugin_field "$entry" 1)
-        display_name=$(plugin_field "$entry" 2)
-        if is_plugin_installed "$dir_name"; then
-            local ver
-            ver=$(get_plugin_version "$dir_name")
-            echo -e "    ${GREEN}●${NC} ${display_name} ${DIM}(${ver})${NC}"
-            has_plugins=true
-        fi
-    done
-    [[ "$has_plugins" == false ]] && echo -e "    ${DIM}还没装任何插件~♡${NC}"
+
+    local plugin_count=0
+    if is_plugin_installed "$PLUGIN_1_FOLDER"; then
+        echo -e "    ${GREEN}●${NC} ${PLUGIN_1_NAME} ${DIM}($(get_plugin_version "$PLUGIN_1_FOLDER"))${NC}"
+        ((plugin_count++))
+    fi
+    if is_plugin_installed "$PLUGIN_2_FOLDER"; then
+        echo -e "    ${GREEN}●${NC} ${PLUGIN_2_NAME} ${DIM}($(get_plugin_version "$PLUGIN_2_FOLDER"))${NC}"
+        ((plugin_count++))
+    fi
+
+    if [[ "$plugin_count" -eq 0 ]]; then
+        echo -e "    ${DIM}没装任何插件~杂鱼可以去插件管理里装♡${NC}"
+    fi
 
     echo ""
 
@@ -1741,7 +1705,7 @@ handle_update() {
         return
     fi
 
-    ensure_network_detected
+    detect_network
 
     step "帮杂鱼检查更新~♡"
 
@@ -1785,6 +1749,17 @@ uninstall_sillytavern() {
     echo ""
     warn "要卸载 SillyTavern 了哦~杂鱼真的舍得吗♡"
     echo -e "    安装目录: ${DIM}${INSTALL_DIR}${NC}"
+
+    # 显示已安装插件
+    local has_plugins=false
+    if is_plugin_installed "$PLUGIN_1_FOLDER" || is_plugin_installed "$PLUGIN_2_FOLDER"; then
+        has_plugins=true
+        echo ""
+        echo -e "    ${YELLOW}已安装的插件也会一起删掉哦~♡${NC}"
+        is_plugin_installed "$PLUGIN_1_FOLDER" && echo -e "      • ${PLUGIN_1_NAME}"
+        is_plugin_installed "$PLUGIN_2_FOLDER" && echo -e "      • ${PLUGIN_2_NAME}"
+    fi
+
     echo ""
     confirm "真的要删掉吗~后悔可没药吃哦杂鱼♡" || { info "算了算了~♡"; return 0; }
     echo ""
@@ -1813,7 +1788,7 @@ uninstall_sillytavern() {
         if confirm "备份一下聊天记录和角色卡吧~杂鱼♡"; then
             local backup_path="$HOME/SillyTavern_backup_$(date +%Y%m%d_%H%M%S)"
             mkdir -p "$backup_path"
-            spin_cmd "备份数据中~♡" "cp -r '$INSTALL_DIR/data' '$backup_path/' && [[ -f '$INSTALL_DIR/config.yaml' ]] && cp '$INSTALL_DIR/config.yaml' '$backup_path/'"
+            spin "备份数据中~♡" bash -c "cp -r '$INSTALL_DIR/data' '$backup_path/' && [[ -f '$INSTALL_DIR/config.yaml' ]] && cp '$INSTALL_DIR/config.yaml' '$backup_path/'"
             success "数据备份在: $backup_path ~♡"
         fi
     fi
@@ -2139,6 +2114,42 @@ full_install() {
     echo ""
     clone_sillytavern
     configure_sillytavern
+
+    # 安装后询问是否安装插件
+    echo ""
+    divider
+    echo -e "  ${BOLD}${PINK}要不要顺便装几个好用的插件~♡${NC}"
+    divider
+    echo ""
+    echo -e "    ${GREEN}●${NC} ${PLUGIN_1_NAME}"
+    echo -e "      ${DIM}为酒馆提供更强大的脚本运行能力${NC}"
+    echo ""
+    echo -e "    ${GREEN}●${NC} ${PLUGIN_2_NAME}"
+    echo -e "      ${DIM}提供提示词模板管理功能${NC}"
+    echo ""
+
+    if confirm "安装全部推荐插件~♡"; then
+        echo ""
+        echo -e "  ${PINK}[1/2]${NC} ${PLUGIN_1_NAME}"
+        install_single_plugin "$PLUGIN_1_NAME" "$PLUGIN_1_FOLDER" "$PLUGIN_1_REPO_INTL" "$PLUGIN_1_REPO_CN"
+        echo ""
+        echo -e "  ${PINK}[2/2]${NC} ${PLUGIN_2_NAME}"
+        install_single_plugin "$PLUGIN_2_NAME" "$PLUGIN_2_FOLDER" "$PLUGIN_2_REPO_INTL" "$PLUGIN_2_REPO_CN"
+        echo ""
+        success "插件全装好了~♡"
+    elif confirm "那要一个一个选吗~♡"; then
+        echo ""
+        if confirm "安装 ${PLUGIN_1_NAME}~♡"; then
+            install_single_plugin "$PLUGIN_1_NAME" "$PLUGIN_1_FOLDER" "$PLUGIN_1_REPO_INTL" "$PLUGIN_1_REPO_CN"
+        fi
+        echo ""
+        if confirm "安装 ${PLUGIN_2_NAME}~♡"; then
+            install_single_plugin "$PLUGIN_2_NAME" "$PLUGIN_2_FOLDER" "$PLUGIN_2_REPO_INTL" "$PLUGIN_2_REPO_CN"
+        fi
+    else
+        info "不装就不装~以后想装再来找人家♡"
+    fi
+
     setup_background
 
     save_config
@@ -2151,37 +2162,19 @@ full_install() {
         warn "脚本保存失败了~不过问题不大♡"
     fi
 
-    # 插件安装
-    echo ""
-    divider
-    echo -e "  ${BOLD}${PINK}要不要顺便装点插件~♡${NC}"
-    divider
-    echo ""
-
-    for entry in "${PLUGIN_LIST[@]}"; do
-        local display_name
-        display_name=$(plugin_field "$entry" 2)
-        echo -e "    ${PINK}•${NC} ${display_name}"
-    done
-    echo ""
-
-    if confirm "安装推荐插件~♡"; then
-        for entry in "${PLUGIN_LIST[@]}"; do
-            echo ""
-            install_single_plugin "$entry"
-        done
-        echo ""
-        success "插件全装好了~♡"
-    else
-        info "不装就算了~以后可以在插件管理里装♡"
-    fi
-
     echo ""
     divider
     echo ""
     echo -e "  ${BOLD}${PINK}🎉 装~好~了~♡ 感谢人家吧杂鱼~${NC}"
     echo ""
     info "安装目录: $INSTALL_DIR"
+
+    # 显示已装插件
+    local p_count=0
+    is_plugin_installed "$PLUGIN_1_FOLDER" && ((p_count++))
+    is_plugin_installed "$PLUGIN_2_FOLDER" && ((p_count++))
+    [[ "$p_count" -gt 0 ]] && info "已安装插件: ${p_count} 个"
+
     show_access_info
     echo ""
     divider
@@ -2214,13 +2207,11 @@ main_menu() {
 
             echo -e "  ${status_icon} SillyTavern ${CYAN}v${version:-?}${NC} ${DIM}| ${INSTALL_DIR}${NC}"
 
-            # 统计已装插件数
-            local plugin_count=0
-            for entry in "${PLUGIN_LIST[@]}"; do
-                is_plugin_installed "$(plugin_field "$entry" 1)" && ((plugin_count++))
-            done
-            [[ $plugin_count -gt 0 ]] && \
-                echo -e "  ${PINK}♡${NC} ${DIM}已装 ${plugin_count} 个插件${NC}"
+            # 显示插件数量
+            local p_count=0
+            is_plugin_installed "$PLUGIN_1_FOLDER" && ((p_count++))
+            is_plugin_installed "$PLUGIN_2_FOLDER" && ((p_count++))
+            [[ "$p_count" -gt 0 ]] && echo -e "  ${DIM}  插件: ${p_count} 个已安装${NC}"
 
             [[ ! -f "$INSTALL_DIR/ksilly.sh" ]] && save_script 2>/dev/null
         else
@@ -2337,10 +2328,10 @@ main() {
         restart)   load_config; restart_sillytavern ;;
         status)    load_config; show_status ;;
         uninstall) detect_os; load_config; uninstall_sillytavern ;;
-        plugin)    load_config; plugin_menu ;;
+        plugins)   load_config; plugin_menu ;;
         "")        main_menu ;;
         *)
-            echo "用法: $0 {install|update|start|stop|restart|status|uninstall|plugin}"
+            echo "用法: $0 {install|update|start|stop|restart|status|uninstall|plugins}"
             echo "  不带参数进入菜单~杂鱼♡"
             exit 1
             ;;
