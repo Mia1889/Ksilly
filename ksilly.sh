@@ -10,11 +10,11 @@
 #  Ksilly - 简单 SillyTavern 部署脚本
 #  作者: Mia1889
 #  仓库: https://github.com/Mia1889/Ksilly
-#  版本: 2.2.0
+#  版本: 2.2.1
 #
 
 # ==================== 全局常量 ====================
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.2.1"
 KSILLY_CONF="$HOME/.ksilly.conf"
 DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
 SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
@@ -45,6 +45,7 @@ PLUGIN_2_REPO_CN="https://codeberg.org/zonde306/ST-Prompt-Template.git"
 # ==================== Caddy / HTTPS 常量 ====================
 CADDYFILE_PATH="/etc/caddy/Caddyfile"
 CADDY_SERVICE="caddy"
+CADDY_CERT_DIR="/etc/caddy/certs"
 
 # ==================== 颜色定义 ====================
 RED='\033[0;31m'
@@ -965,6 +966,77 @@ remove_firewall_port() {
 
 # ==================== Caddy / HTTPS 管理 ====================
 
+install_openssl() {
+    if command_exists openssl; then
+        return 0
+    fi
+
+    info "安装 openssl~♡"
+    case "$PKG_MANAGER" in
+        apt)    spin "安装 openssl~♡" $NEED_SUDO apt-get install -y -qq openssl ;;
+        yum)    spin "安装 openssl~♡" $NEED_SUDO yum install -y -q openssl ;;
+        dnf)    spin "安装 openssl~♡" $NEED_SUDO dnf install -y -q openssl ;;
+        pacman) spin "安装 openssl~♡" $NEED_SUDO pacman -S --noconfirm openssl ;;
+        apk)    spin "安装 openssl~♡" $NEED_SUDO apk add openssl ;;
+        brew)   spin "安装 openssl~♡" brew install openssl ;;
+        *)      error "装不了 openssl~杂鱼自己想办法♡"; return 1 ;;
+    esac
+
+    command_exists openssl || { error "openssl 装不上~♡"; return 1; }
+}
+
+generate_self_signed_cert() {
+    get_sudo || return 1
+    install_openssl || return 1
+
+    step "生成自签证书~杂鱼什么都不用管♡"
+
+    $NEED_SUDO mkdir -p "$CADDY_CERT_DIR"
+
+    # 收集 IP 用于 SAN
+    local local_ip public_ip san_entries
+    local_ip=$(get_local_ip)
+    public_ip=$(get_public_ip)
+
+    san_entries="IP:127.0.0.1"
+    [[ "$local_ip" != "无法获取" && -n "$local_ip" ]] && san_entries="${san_entries},IP:${local_ip}"
+    [[ -n "$public_ip" ]] && san_entries="${san_entries},IP:${public_ip}"
+    san_entries="${san_entries},DNS:localhost"
+
+    info "证书覆盖地址: ${san_entries}"
+
+    # 生成证书 (10年有效期，无交互)
+    if $NEED_SUDO openssl req -x509 -newkey rsa:2048 \
+        -keyout "$CADDY_CERT_DIR/key.pem" \
+        -out "$CADDY_CERT_DIR/cert.pem" \
+        -days 3650 -nodes \
+        -subj "/CN=SillyTavern" \
+        -addext "subjectAltName=${san_entries}" \
+        2>/dev/null; then
+
+        # 设置权限给 caddy 用户
+        if id caddy &>/dev/null; then
+            $NEED_SUDO chown caddy:caddy "$CADDY_CERT_DIR/key.pem" "$CADDY_CERT_DIR/cert.pem"
+        fi
+        $NEED_SUDO chmod 600 "$CADDY_CERT_DIR/key.pem"
+        $NEED_SUDO chmod 644 "$CADDY_CERT_DIR/cert.pem"
+
+        success "自签证书生成好了~有效期 10 年♡"
+        return 0
+    else
+        error "证书生成失败了~♡"
+        return 1
+    fi
+}
+
+remove_self_signed_cert() {
+    if [[ -d "$CADDY_CERT_DIR" ]]; then
+        get_sudo 2>/dev/null
+        $NEED_SUDO rm -rf "$CADDY_CERT_DIR"
+        info "自签证书清理了~♡"
+    fi
+}
+
 install_caddy() {
     if [[ "$IS_TERMUX" == true ]]; then
         warn "Termux 不支持 Caddy~跳过♡"
@@ -1100,15 +1172,11 @@ ${domain} {
 CADDYEOF
         info "Caddyfile 生成好了~域名: ${domain} ♡"
     else
-        # 无域名 - 自签证书
+        # 无域名 - 使用 openssl 生成的自签证书
         $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << CADDYEOF
 # Ksilly 生成 - 自签证书 HTTPS
-{
-    auto_https disable_redirects
-}
-
 :443 {
-    tls internal
+    tls ${CADDY_CERT_DIR}/cert.pem ${CADDY_CERT_DIR}/key.pem
     reverse_proxy localhost:${port}
 }
 CADDYEOF
@@ -1222,6 +1290,9 @@ setup_https() {
         CADDY_DOMAIN=""
         CADDY_CERT_TYPE="selfsigned"
 
+        # 生成自签证书
+        generate_self_signed_cert || { error "证书生成失败~HTTPS 搞不了♡"; return 1; }
+
         # 生成 Caddyfile
         generate_caddyfile "$port" "" "selfsigned"
 
@@ -1295,7 +1366,7 @@ remove_https() {
     $NEED_SUDO systemctl disable "$CADDY_SERVICE" &>/dev/null
 
     # 还原 Caddyfile
-    if [[ -f "${CADDYFILE_PATH}.bak."* ]] 2>/dev/null; then
+    if ls "${CADDYFILE_PATH}.bak."* &>/dev/null 2>&1; then
         local latest_bak
         latest_bak=$(ls -t "${CADDYFILE_PATH}.bak."* 2>/dev/null | head -1)
         if [[ -n "$latest_bak" ]]; then
@@ -1303,7 +1374,6 @@ remove_https() {
             info "Caddyfile 还原了~♡"
         fi
     else
-        # 写一个空的默认 Caddyfile
         $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << 'CADDYEOF'
 # The Caddyfile is an easy way to configure your Caddy web server.
 # https://caddyserver.com/docs/caddyfile
@@ -1313,6 +1383,9 @@ remove_https() {
 CADDYEOF
         info "Caddyfile 重置为默认~♡"
     fi
+
+    # 清理自签证书
+    remove_self_signed_cert
 
     # 恢复 SillyTavern 公网监听
     set_yaml_val "listen" "true" "$config_file"
@@ -1355,6 +1428,11 @@ https_status() {
         else
             echo -e "    证书类型       ${YELLOW}自签证书${NC}"
             echo -e "    域名           ${DIM}未配置${NC}"
+            if [[ -f "$CADDY_CERT_DIR/cert.pem" ]]; then
+                local expiry
+                expiry=$(openssl x509 -enddate -noout -in "$CADDY_CERT_DIR/cert.pem" 2>/dev/null | sed 's/notAfter=//')
+                [[ -n "$expiry" ]] && echo -e "    证书有效期     ${DIM}${expiry}${NC}"
+            fi
         fi
     else
         echo -e "    HTTPS          ${DIM}未启用${NC}"
@@ -1392,9 +1470,10 @@ https_manage_menu() {
         echo ""
         echo -e "  ${GREEN}1)${NC} 启用/重新配置 HTTPS"
         echo -e "  ${GREEN}2)${NC} 移除 HTTPS (恢复 HTTP)"
-        echo -e "  ${GREEN}3)${NC} 重启 Caddy"
-        echo -e "  ${GREEN}4)${NC} 查看 Caddy 日志"
-        echo -e "  ${GREEN}5)${NC} 查看 Caddyfile"
+        echo -e "  ${GREEN}3)${NC} 重新生成自签证书"
+        echo -e "  ${GREEN}4)${NC} 重启 Caddy"
+        echo -e "  ${GREEN}5)${NC} 查看 Caddy 日志"
+        echo -e "  ${GREEN}6)${NC} 查看 Caddyfile"
         echo ""
         echo -e "  ${RED}0)${NC} 返回~♡"
         echo ""
@@ -1410,13 +1489,11 @@ https_manage_menu() {
                     if confirm "先移除再重新配~♡"; then
                         remove_https
                         echo ""
-                        # 恢复 listen 为 true 以便 setup_https 判断
                         local config_file="$INSTALL_DIR/config.yaml"
                         set_yaml_val "listen" "true" "$config_file"
                         setup_https
                     fi
                 else
-                    # 确保 listen 为 true
                     local config_file="$INSTALL_DIR/config.yaml"
                     local listen_val
                     listen_val=$(get_yaml_val "listen" "$config_file")
@@ -1444,6 +1521,17 @@ https_manage_menu() {
                 remove_https
                 ;;
             3)
+                if [[ "$CADDY_CERT_TYPE" != "selfsigned" ]]; then
+                    warn "当前不是自签证书模式~这个选项没用♡"
+                else
+                    if confirm "重新生成自签证书~♡"; then
+                        generate_self_signed_cert
+                        caddy_restart
+                        success "证书更新了~♡"
+                    fi
+                fi
+                ;;
+            4)
                 if command_exists caddy && is_caddy_running; then
                     caddy_restart
                 elif command_exists caddy; then
@@ -1452,7 +1540,7 @@ https_manage_menu() {
                     warn "Caddy 还没装呢~♡"
                 fi
                 ;;
-            4)
+            5)
                 if command_exists journalctl; then
                     echo ""
                     echo -e "  ${GREEN}1)${NC} 看最近的日志"
@@ -1468,7 +1556,7 @@ https_manage_menu() {
                     warn "没有 journalctl~看不了日志♡"
                 fi
                 ;;
-            5)
+            6)
                 if [[ -f "$CADDYFILE_PATH" ]]; then
                     echo ""
                     echo -e "  ${DIM}--- ${CADDYFILE_PATH} ---${NC}"
@@ -2002,7 +2090,6 @@ EOF
     # --- 防火墙 (仅在未使用 HTTPS 时直接开 ST 端口) ---
     if [[ "$listen_enabled" == true ]]; then
         echo ""
-        # 先开防火墙，后续如果配了 HTTPS 会再调整
         open_firewall_port "$port"
     fi
 
@@ -2405,7 +2492,7 @@ uninstall_sillytavern() {
         $NEED_SUDO systemctl disable "$CADDY_SERVICE" &>/dev/null
 
         # 还原 Caddyfile
-        if [[ -f "${CADDYFILE_PATH}.bak."* ]] 2>/dev/null; then
+        if ls "${CADDYFILE_PATH}.bak."* &>/dev/null 2>&1; then
             local latest_bak
             latest_bak=$(ls -t "${CADDYFILE_PATH}.bak."* 2>/dev/null | head -1)
             [[ -n "$latest_bak" ]] && $NEED_SUDO cp "$latest_bak" "$CADDYFILE_PATH" 2>/dev/null
@@ -2416,6 +2503,9 @@ uninstall_sillytavern() {
 }
 CADDYEOF
         fi
+
+        # 清理自签证书
+        remove_self_signed_cert
 
         remove_firewall_port 443
         remove_firewall_port 80
@@ -2586,7 +2676,6 @@ modify_config_menu() {
                     success "端口改成 $new_port 了~♡"
 
                     if [[ "$CADDY_HTTPS_ENABLED" == "true" ]]; then
-                        # 同步更新 Caddyfile 的反代端口
                         info "同步更新 Caddy 反代端口~♡"
                         generate_caddyfile "$new_port" "$CADDY_DOMAIN" "$CADDY_CERT_TYPE"
                         caddy_reload
@@ -2679,7 +2768,6 @@ EOF
                         sed -i 's/\r$//' "$config_file"
                         success "重置好了~从头再来吧杂鱼♡"
 
-                        # 如果 HTTPS 还在，提醒冲突
                         if [[ "$CADDY_HTTPS_ENABLED" == "true" ]]; then
                             warn "HTTPS 还在~但配置已重置~♡"
                             warn "SillyTavern 的 listen 可能变了~建议去 HTTPS 管理检查♡"
