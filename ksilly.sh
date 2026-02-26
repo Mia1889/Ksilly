@@ -11,7 +11,7 @@
 #  作者: Mia1889
 #  仓库: https://github.com/Mia1889/Ksilly
 #  版本: 2.0.0
-#  支持: Linux / macOS / Termux / Windows(Git Bash/WSL)
+#  支持: Linux / macOS / Termux / Windows(Git Bash) / WSL
 #
 
 # ==================== 全局常量 ====================
@@ -19,11 +19,11 @@ SCRIPT_VERSION="2.0.0"
 KSILLY_CONF="$HOME/.ksilly.conf"
 DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
 SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
-SILLYTAVERN_RAW="https://raw.githubusercontent.com/SillyTavern/SillyTavern"
 KSILLY_RAW="https://raw.githubusercontent.com/Mia1889/Ksilly/main/ksilly.sh"
+KSILLY_BAT_RAW="https://raw.githubusercontent.com/Mia1889/Ksilly/main/ksilly.bat"
 PM2_APP_NAME="sillytavern"
 MIN_NODE_VERSION=18
-CURL_TIMEOUT="--connect-timeout 5 --max-time 15"
+CURL_OPTS="--connect-timeout 5 --max-time 15"
 GITHUB_PROXIES=(
     "https://ghfast.top/"
     "https://gh-proxy.com/"
@@ -52,16 +52,15 @@ setup_colors
 IS_CHINA=false
 GITHUB_PROXY=""
 INSTALL_DIR=""
-PLATFORM=""         # linux / macos / termux / windows / wsl
-PKG_MANAGER=""      # apt / yum / dnf / pacman / apk / brew / pkg / none
+PLATFORM=""
+PKG_MANAGER=""
 CURRENT_USER=$(whoami)
 NEED_SUDO=""
-HAS_SYSTEMD=false
 
 # ==================== 信号处理 ====================
 cleanup() {
     echo ""
-    info "操作已取消"
+    echo -e "  ${YELLOW}!${NC} 操作已取消"
     exit 130
 }
 trap cleanup INT TERM
@@ -94,8 +93,7 @@ divider() { echo -e "  ${DIM}─────────────────
 
 # ==================== 输入函数 ====================
 confirm() {
-    local prompt="$1"
-    local result=""
+    local prompt="$1" result=""
     while true; do
         echo -ne "  ${BLUE}?${NC} ${prompt} ${DIM}(y/n)${NC}: " >&2
         read -r result </dev/tty 2>/dev/null || read -r result
@@ -108,9 +106,7 @@ confirm() {
 }
 
 read_input() {
-    local prompt="$1"
-    local default="${2:-}"
-    local result=""
+    local prompt="$1" default="${2:-}" result=""
     if [[ -n "$default" ]]; then
         echo -ne "  ${BLUE}?${NC} ${prompt} ${DIM}[${default}]${NC}: " >&2
     else
@@ -122,20 +118,17 @@ read_input() {
 }
 
 read_password() {
-    local prompt="$1"
-    local result=""
+    local prompt="$1" result=""
     while [[ -z "$result" ]]; do
-        echo -ne "  ${BLUE}?${NC} ${prompt} ${DIM}(输入时不会显示字符，这是正常现象)${NC}: " >&2
+        echo -ne "  ${BLUE}?${NC} ${prompt} ${DIM}(输入时不会显示字符, 这是正常现象)${NC}: " >&2
         read -rs result </dev/tty 2>/dev/null || read -rs result
         echo "" >&2
-        if [[ -z "$result" ]]; then
-            warn "密码不能为空，请重新输入"
-        fi
+        [[ -z "$result" ]] && warn "密码不能为空, 请重新输入"
     done
     echo "$result"
 }
 
-pause() {
+pause_key() {
     echo ""
     echo -ne "  ${DIM}按 Enter 继续...${NC}" >&2
     read -r </dev/tty 2>/dev/null || read -r
@@ -158,7 +151,6 @@ get_sudo() {
     fi
 }
 
-# 跨平台 sed -i
 sed_i() {
     if [[ "$PLATFORM" == "macos" ]]; then
         sed -i '' "$@"
@@ -167,8 +159,7 @@ sed_i() {
     fi
 }
 
-# 带超时执行命令
-run_timeout() {
+run_with_timeout() {
     local secs="$1"; shift
     if command_exists timeout; then
         timeout "$secs" "$@"
@@ -188,14 +179,14 @@ format_bool() {
     fi
 }
 
-# 转义 sed 替换字符串中的特殊字符
 escape_sed() {
     printf '%s' "$1" | sed 's/[&/\]/\\&/g; s/"/\\"/g'
 }
 
-# ==================== YAML 辅助函数 ====================
+# ==================== YAML 辅助 ====================
 get_yaml_val() {
     local key="$1" file="$2"
+    [[ -f "$file" ]] || return
     grep -E "^\s*${key}:" "$file" 2>/dev/null | head -1 | \
         sed "s/^[[:space:]]*${key}:[[:space:]]*//" | \
         tr -d '\r\n' | sed 's/^["'\'']\(.*\)["'\''"]$/\1/' | \
@@ -243,19 +234,13 @@ detect_platform() {
         MINGW*|MSYS*|CYGWIN*)
             PLATFORM="windows"
             PKG_MANAGER="none"
+            DEFAULT_INSTALL_DIR="${HOME}/SillyTavern"
             ;;
         *)
             PLATFORM="linux"
             detect_linux_pkg
             ;;
     esac
-
-    # 检查 systemd
-    if command_exists systemctl && [[ "$PLATFORM" != "termux" && "$PLATFORM" != "windows" ]]; then
-        if systemctl --version &>/dev/null 2>&1; then
-            HAS_SYSTEMD=true
-        fi
-    fi
 }
 
 detect_linux_pkg() {
@@ -302,9 +287,8 @@ detect_network() {
     IS_CHINA=false
     GITHUB_PROXY=""
 
-    # 快速测试: 能访问百度但不能访问 Google → 中国大陆
     local can_baidu=false can_google=false
-    if curl -s $CURL_TIMEOUT "https://www.baidu.com" &>/dev/null; then
+    if curl -s --connect-timeout 3 --max-time 5 "https://www.baidu.com" &>/dev/null; then
         can_baidu=true
     fi
     if curl -s --connect-timeout 3 --max-time 5 "https://www.google.com" &>/dev/null; then
@@ -315,7 +299,6 @@ detect_network() {
         IS_CHINA=true
     fi
 
-    # 备用检测
     if [[ "$IS_CHINA" == false && "$can_google" == false ]]; then
         local country=""
         country=$(curl -s --connect-timeout 3 --max-time 5 "https://ipapi.co/country_code/" 2>/dev/null || true)
@@ -339,7 +322,7 @@ find_github_proxy() {
             return 0
         fi
     done
-    warn "未找到可用加速代理，将尝试直连"
+    warn "未找到可用加速代理, 将尝试直连"
     GITHUB_PROXY=""
 }
 
@@ -355,20 +338,23 @@ get_github_url() {
 # ==================== IP 检测 ====================
 get_local_ip() {
     local ip=""
-
     case "$PLATFORM" in
+        windows)
+            ip=$(ipconfig.exe 2>/dev/null | grep -i "IPv4" | grep -v "127.0.0.1" | head -1 | \
+                 sed 's/.*: *//' | tr -d '\r ')
+            if [[ -z "$ip" || ! "$ip" =~ ^[0-9]+\. ]]; then
+                ip=$(powershell.exe -NoProfile -Command \
+                    "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object {\$_.InterfaceAlias -notlike '*Loopback*' -and \$_.IPAddress -ne '127.0.0.1'} | Select-Object -First 1).IPAddress" \
+                    2>/dev/null | tr -d '\r ')
+            fi
+            ;;
         termux)
             ip=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}')
             ;;
-        windows)
-            ip=$(ipconfig 2>/dev/null | grep -i "IPv4" | head -1 | awk -F': ' '{print $2}' | tr -d '\r')
-            [[ -z "$ip" ]] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-            ;;
         macos)
-            ip=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)
+            ip=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)
             ;;
         *)
-            # Linux / WSL
             if command_exists ip; then
                 ip=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[\d.]+' | head -1)
                 [[ -z "$ip" ]] && ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
@@ -378,7 +364,6 @@ get_local_ip() {
                 ip=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | sed 's/addr://')
             ;;
     esac
-
     echo "${ip:-未知}"
 }
 
@@ -390,9 +375,8 @@ get_public_ip() {
         "https://ipinfo.io/ip"
         "https://icanhazip.com"
     )
-
     for svc in "${services[@]}"; do
-        ip=$(curl -s --connect-timeout 3 --max-time 5 "$svc" 2>/dev/null | tr -d '[:space:]')
+        ip=$(curl -s --connect-timeout 3 --max-time 5 "$svc" 2>/dev/null | tr -d '[:space:]' | tr -d '\r')
         if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "$ip"
             return 0
@@ -440,21 +424,33 @@ save_script_copy() {
     local target="$INSTALL_DIR/ksilly.sh"
     local source="${BASH_SOURCE[0]:-$0}"
 
-    # 如果是从文件运行且可读，直接复制
-    if [[ -f "$source" && -r "$source" && "$source" != "/dev/"* ]]; then
+    if [[ -f "$source" && -r "$source" && "$source" != "/dev/"* && "$source" != "/proc/"* ]]; then
         cp "$source" "$target" 2>/dev/null || true
     else
-        # 从管道/进程替换运行，从 GitHub 下载
         local url="$KSILLY_RAW"
         [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]] && url="${GITHUB_PROXY}${url}"
-        curl -fsSL $CURL_TIMEOUT "$url" -o "$target" 2>/dev/null || true
+        curl -fsSL $CURL_OPTS "$url" -o "$target" 2>/dev/null || true
     fi
-
     chmod +x "$target" 2>/dev/null || true
 
     if [[ -f "$target" ]]; then
-        info "脚本已保存到: ${target}"
-        info "后续可直接运行: ${CYAN}bash ${target}${NC}"
+        info "脚本已保存: ${target}"
+    fi
+
+    # Windows 额外保存 .bat
+    if [[ "$PLATFORM" == "windows" ]]; then
+        local bat_target="$INSTALL_DIR/ksilly.bat"
+        if [[ ! -f "$bat_target" ]]; then
+            local bat_url="$KSILLY_BAT_RAW"
+            [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]] && bat_url="${GITHUB_PROXY}${bat_url}"
+            curl -fsSL $CURL_OPTS "$bat_url" -o "$bat_target" 2>/dev/null || true
+        fi
+        if [[ -f "$bat_target" ]]; then
+            info "Windows 启动器: ${bat_target}"
+            info "后续可双击 ${CYAN}ksilly.bat${NC} 运行"
+        fi
+    else
+        info "后续可运行: ${CYAN}bash ${target}${NC}"
     fi
 }
 
@@ -484,7 +480,6 @@ install_pkg() {
         zypper) $NEED_SUDO zypper install -y "$pkg" 2>/dev/null ;;
         pkg)    pkg install -y "$pkg" 2>/dev/null ;;
         brew)   brew install "$pkg" 2>/dev/null ;;
-        none)   return 1 ;;
         *)      return 1 ;;
     esac
 }
@@ -497,13 +492,14 @@ install_git() {
     fi
 
     step "安装 Git..."
+
     if [[ "$PLATFORM" == "windows" ]]; then
-        error "请先安装 Git: https://git-scm.com/download/win"
-        error "安装后重新打开 Git Bash 运行此脚本"
+        error "Git 未找到 (不应该发生, bat 启动器应已安装)"
+        error "请关闭此窗口, 重新运行 ksilly.bat"
         exit 1
     fi
 
-    install_pkg git || { error "Git 安装失败，请手动安装"; exit 1; }
+    install_pkg git || { error "Git 安装失败, 请手动安装"; exit 1; }
     command_exists git && success "Git 安装完成" || { error "Git 安装失败"; exit 1; }
 }
 
@@ -529,12 +525,26 @@ install_nodejs() {
 
     case "$PLATFORM" in
         windows)
-            error "请先安装 Node.js ≥v${MIN_NODE_VERSION}: https://nodejs.org/"
-            error "安装后重新打开终端运行此脚本"
-            exit 1
+            # Windows: bat 启动器应已安装, 这里尝试修复 PATH
+            local node_paths=(
+                "/c/Program Files/nodejs"
+                "$PROGRAMFILES/nodejs"
+                "$LOCALAPPDATA/Programs/nodejs"
+            )
+            for np in "${node_paths[@]}"; do
+                if [[ -f "${np}/node.exe" ]] || [[ -f "${np}/node" ]]; then
+                    export PATH="${np}:$PATH"
+                    hash -r 2>/dev/null
+                    break
+                fi
+            done
+            if ! check_node_version; then
+                error "Node.js 未找到或版本过低"
+                error "请关闭此窗口, 重新运行 ksilly.bat"
+                exit 1
+            fi
             ;;
         termux)
-            info "通过 pkg 安装 Node.js..."
             pkg install -y nodejs-lts 2>/dev/null || pkg install -y nodejs 2>/dev/null
             ;;
         macos)
@@ -561,12 +571,6 @@ install_nodejs() {
         error "Node.js 安装失败"
         error "请手动安装 Node.js ≥v${MIN_NODE_VERSION}: https://nodejs.org/"
         exit 1
-    fi
-
-    # 中国大陆设置 npm 镜像
-    if [[ "$IS_CHINA" == true ]]; then
-        npm config set registry https://registry.npmmirror.com 2>/dev/null || true
-        info "npm 镜像已设置为 npmmirror"
     fi
 }
 
@@ -607,9 +611,7 @@ install_nodejs_binary() {
     local node_ver="v20.18.0"
     local arch="" os_name="linux"
 
-    case "$PLATFORM" in
-        macos) os_name="darwin" ;;
-    esac
+    [[ "$PLATFORM" == "macos" ]] && os_name="darwin"
 
     case "$(uname -m)" in
         x86_64|amd64)  arch="x64" ;;
@@ -625,7 +627,7 @@ install_nodejs_binary() {
     local tmp_dir
     tmp_dir=$(mktemp -d)
 
-    if curl -fSL --progress-bar $CURL_TIMEOUT -o "${tmp_dir}/${filename}" "$download_url"; then
+    if curl -fSL --progress-bar $CURL_OPTS -o "${tmp_dir}/${filename}" "$download_url"; then
         info "解压并安装..."
         cd "$tmp_dir"
         tar xf "$filename"
@@ -642,52 +644,102 @@ install_nodejs_binary() {
 
 # ==================== 系统依赖安装 ====================
 install_dependencies() {
-    step "安装系统依赖..."
+    step "检查系统依赖..."
     get_sudo
 
-    if [[ "$PLATFORM" == "windows" ]]; then
-        # Windows: 只检查关键命令
-        local missing=""
-        command_exists git  || missing="${missing} Git"
-        command_exists node || missing="${missing} Node.js"
-        if [[ -n "$missing" ]]; then
-            error "缺少以下软件:${missing}"
-            error "请先安装后重新运行脚本"
-            [[ "$missing" == *"Git"* ]] && error "  Git: https://git-scm.com/"
-            [[ "$missing" == *"Node"* ]] && error "  Node.js: https://nodejs.org/"
-            exit 1
-        fi
-        info "系统依赖检查通过"
-        return 0
-    fi
-
-    if [[ "$PKG_MANAGER" != "none" && "$PKG_MANAGER" != "unknown" ]]; then
-        update_pkg_cache
-    fi
-
-    # 安装基础工具
     case "$PLATFORM" in
+        windows)
+            info "Windows 平台依赖检查..."
+
+            if ! command_exists git; then
+                local git_paths=(
+                    "/c/Program Files/Git/cmd"
+                    "/c/Program Files/Git/bin"
+                    "$PROGRAMFILES/Git/cmd"
+                )
+                for gp in "${git_paths[@]}"; do
+                    if [[ -d "$gp" ]]; then
+                        export PATH="${gp}:$PATH"
+                        hash -r 2>/dev/null
+                        break
+                    fi
+                done
+            fi
+
+            if ! command_exists git; then
+                error "Git 未找到"
+                error "请关闭此窗口, 重新运行 ksilly.bat 自动安装"
+                exit 1
+            fi
+            info "Git $(git --version | awk '{print $3}') ✓"
+
+            if ! command_exists node; then
+                local node_paths=(
+                    "/c/Program Files/nodejs"
+                    "$PROGRAMFILES/nodejs"
+                    "$LOCALAPPDATA/Programs/nodejs"
+                )
+                for np in "${node_paths[@]}"; do
+                    if [[ -d "$np" ]]; then
+                        export PATH="${np}:$PATH"
+                        hash -r 2>/dev/null
+                        break
+                    fi
+                done
+            fi
+
+            if ! command_exists node; then
+                error "Node.js 未找到"
+                error "请关闭此窗口, 重新运行 ksilly.bat 自动安装"
+                exit 1
+            fi
+
+            if ! check_node_version; then
+                error "Node.js $(node -v) 版本过低, 需要 ≥v${MIN_NODE_VERSION}"
+                exit 1
+            fi
+
+            info "Node.js $(node -v) ✓"
+            info "npm v$(npm -v 2>/dev/null || echo '?') ✓"
+
+            if [[ "$IS_CHINA" == true ]]; then
+                npm config set registry https://registry.npmmirror.com 2>/dev/null || true
+                info "npm 镜像: npmmirror"
+            fi
+            return 0
+            ;;
+
         termux)
+            pkg update -y 2>/dev/null
             pkg install -y curl wget git 2>/dev/null
+            install_git
+            install_nodejs
             ;;
         macos)
-            : # macOS 自带 curl, git
+            install_git
+            install_nodejs
             ;;
         *)
+            if [[ "$PKG_MANAGER" != "none" && "$PKG_MANAGER" != "unknown" ]]; then
+                update_pkg_cache
+            fi
             for tool in curl wget tar; do
                 command_exists "$tool" || install_pkg "$tool"
             done
-            # xz 支持
             case "$PKG_MANAGER" in
-                apt) install_pkg xz-utils ;;
-                yum|dnf) install_pkg xz ;;
-                pacman) install_pkg xz ;;
+                apt) command_exists xz || install_pkg xz-utils ;;
+                yum|dnf) command_exists xz || install_pkg xz ;;
+                pacman) command_exists xz || install_pkg xz ;;
             esac
+            install_git
+            install_nodejs
             ;;
     esac
 
-    install_git
-    install_nodejs
+    if [[ "$IS_CHINA" == true ]]; then
+        npm config set registry https://registry.npmmirror.com 2>/dev/null || true
+        info "npm 镜像: npmmirror"
+    fi
 }
 
 # ==================== PM2 管理 ====================
@@ -699,7 +751,6 @@ install_pm2() {
 
     step "安装 PM2 进程管理器..."
 
-    # 尝试不用 sudo
     if npm install -g pm2 2>/dev/null; then
         hash -r 2>/dev/null || true
         if command_exists pm2; then
@@ -708,11 +759,20 @@ install_pm2() {
         fi
     fi
 
-    # 如果失败, 尝试用 sudo (非 termux/windows)
     if [[ "$PLATFORM" != "termux" && "$PLATFORM" != "windows" ]]; then
         get_sudo
         if [[ -n "$NEED_SUDO" ]]; then
             $NEED_SUDO npm install -g pm2 2>/dev/null
+            hash -r 2>/dev/null || true
+        fi
+    fi
+
+    # Windows: 检查 npm 全局路径
+    if [[ "$PLATFORM" == "windows" ]] && ! command_exists pm2; then
+        local npm_prefix
+        npm_prefix=$(npm config get prefix 2>/dev/null | tr -d '\r')
+        if [[ -n "$npm_prefix" && -d "$npm_prefix" ]]; then
+            export PATH="$npm_prefix:$PATH"
             hash -r 2>/dev/null || true
         fi
     fi
@@ -736,7 +796,9 @@ pm2_start() {
         warn "PM2 未安装, 使用前台模式启动"
         cd "$INSTALL_DIR"
         info "按 Ctrl+C 停止运行"
+        echo ""
         node server.js
+        cd - >/dev/null 2>&1
         return
     fi
 
@@ -755,14 +817,14 @@ pm2_start() {
         success "SillyTavern 已启动"
         return 0
     else
-        error "启动失败, 查看日志: pm2 logs $PM2_APP_NAME"
+        error "启动失败"
+        warn "查看日志: pm2 logs $PM2_APP_NAME"
         return 1
     fi
 }
 
 pm2_stop() {
     if ! command_exists pm2; then
-        # 尝试直接 kill
         local pid
         pid=$(pgrep -f "node.*server\.js" 2>/dev/null | head -1 || true)
         if [[ -n "$pid" ]]; then
@@ -780,7 +842,6 @@ pm2_stop() {
         pm2 stop "$PM2_APP_NAME" 2>/dev/null
         success "SillyTavern 已停止"
     else
-        # 也检查是否有非 PM2 的进程
         local pid
         pid=$(pgrep -f "node.*server\.js" 2>/dev/null | head -1 || true)
         if [[ -n "$pid" ]]; then
@@ -817,7 +878,7 @@ pm2_setup_startup() {
     case "$PLATFORM" in
         termux)
             warn "Termux 不支持 PM2 开机自启"
-            warn "请使用 Termux:Boot 应用实现开机启动"
+            info "请使用 Termux:Boot 应用实现开机启动"
             info "在 ~/.termux/boot/ 中创建启动脚本即可"
             return 0
             ;;
@@ -831,7 +892,6 @@ pm2_setup_startup() {
     step "配置 PM2 开机自启..."
     get_sudo
 
-    # pm2 startup 会输出需要运行的 sudo 命令
     local startup_output
     startup_output=$(pm2 startup 2>&1 || true)
 
@@ -865,8 +925,34 @@ pm2_remove_startup() {
 open_firewall_port() {
     local port="$1"
 
-    [[ "$PLATFORM" == "termux" || "$PLATFORM" == "windows" || "$PLATFORM" == "macos" ]] && return
+    case "$PLATFORM" in
+        termux|macos)
+            return ;;
+        windows)
+            step "检查 Windows 防火墙端口 ${port}..."
+            local rule_name="SillyTavern_${port}"
+            local exists
+            exists=$(powershell.exe -NoProfile -Command \
+                "Get-NetFirewallRule -DisplayName '${rule_name}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DisplayName" \
+                2>/dev/null | tr -d '\r')
+            if [[ "$exists" == "$rule_name" ]]; then
+                info "Windows 防火墙: 端口 ${port} 已放行"
+            else
+                info "正在添加 Windows 防火墙规则..."
+                powershell.exe -NoProfile -Command \
+                    "Start-Process powershell -ArgumentList '-NoProfile','-Command','New-NetFirewallRule -DisplayName \"${rule_name}\" -Direction Inbound -Protocol TCP -LocalPort ${port} -Action Allow' -Verb RunAs -Wait" \
+                    2>/dev/null
+                if [[ $? -eq 0 ]]; then
+                    success "Windows 防火墙: 已放行端口 ${port}"
+                else
+                    warn "防火墙规则添加失败 (可能用户取消了权限)"
+                    warn "请手动在 Windows 防火墙中放行端口 ${port}"
+                fi
+            fi
+            return ;;
+    esac
 
+    # Linux 防火墙
     get_sudo
     step "检查防火墙端口 ${port}..."
 
@@ -911,7 +997,6 @@ open_firewall_port() {
             if ! $NEED_SUDO iptables -L INPUT -n 2>/dev/null | grep -qw "dpt:${port}"; then
                 $NEED_SUDO iptables -I INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
                 success "iptables: 已放行端口 ${port}/tcp"
-                # 持久化
                 command_exists iptables-save && {
                     [[ -d /etc/iptables ]] && $NEED_SUDO sh -c "iptables-save > /etc/iptables/rules.v4" 2>/dev/null
                     command_exists netfilter-persistent && $NEED_SUDO netfilter-persistent save 2>/dev/null
@@ -922,9 +1007,7 @@ open_firewall_port() {
         else
             info "未检测到活动的防火墙"
         fi
-    fi
-
-    if [[ "$firewall_found" == false ]] && ! command_exists iptables; then
+    elif [[ "$firewall_found" == false ]]; then
         info "未检测到防火墙"
     fi
 
@@ -934,8 +1017,15 @@ open_firewall_port() {
 
 remove_firewall_port() {
     local port="$1"
-    [[ "$PLATFORM" == "termux" || "$PLATFORM" == "windows" || "$PLATFORM" == "macos" ]] && return
-
+    case "$PLATFORM" in
+        termux|macos) return ;;
+        windows)
+            local rule_name="SillyTavern_${port}"
+            powershell.exe -NoProfile -Command \
+                "Start-Process powershell -ArgumentList '-NoProfile','-Command','Remove-NetFirewallRule -DisplayName \"${rule_name}\" -ErrorAction SilentlyContinue' -Verb RunAs -Wait" \
+                2>/dev/null || true
+            return ;;
+    esac
     get_sudo
     if command_exists ufw; then
         $NEED_SUDO ufw delete allow "$port/tcp" 2>/dev/null || true
@@ -946,6 +1036,42 @@ remove_firewall_port() {
     fi
 }
 
+# ==================== 访问信息显示 ====================
+show_access_info() {
+    local port
+    port=$(get_port)
+
+    local listen_mode
+    listen_mode=$(get_yaml_val "listen" "$INSTALL_DIR/config.yaml" 2>/dev/null)
+
+    echo ""
+    divider
+    echo -e "  ${BOLD}访问地址${NC}"
+    divider
+
+    if [[ "$listen_mode" == "true" ]]; then
+        local local_ip public_ip
+        local_ip=$(get_local_ip)
+        public_ip=$(get_public_ip)
+
+        echo -e "  本机访问:   ${CYAN}http://127.0.0.1:${port}${NC}"
+        echo -e "  局域网访问: ${CYAN}http://${local_ip}:${port}${NC}"
+        if [[ -n "$public_ip" ]]; then
+            echo -e "  公网访问:   ${CYAN}http://${public_ip}:${port}${NC}"
+        else
+            echo -e "  公网访问:   ${DIM}(未获取到公网IP)${NC}"
+        fi
+
+        if [[ -n "$public_ip" && "$local_ip" != "$public_ip" && "$local_ip" != "未知" ]]; then
+            echo -e "  ${DIM}提示: 局域网IP与公网IP不同, 可能需要配置端口转发${NC}"
+        fi
+    else
+        echo -e "  访问地址: ${CYAN}http://127.0.0.1:${port}${NC}"
+        echo -e "  ${DIM}(仅本机可访问, 如需远程访问请开启监听)${NC}"
+    fi
+    divider
+}
+
 # ==================== SillyTavern 克隆 ====================
 clone_sillytavern() {
     step "安装 SillyTavern..."
@@ -954,7 +1080,7 @@ clone_sillytavern() {
 
     if [[ -d "$INSTALL_DIR" ]]; then
         if [[ -f "$INSTALL_DIR/server.js" ]]; then
-            warn "目录已存在 SillyTavern 安装: $INSTALL_DIR"
+            warn "目录已存在 SillyTavern: $INSTALL_DIR"
             if confirm "删除并重新安装?"; then
                 pm2_stop
                 rm -rf "$INSTALL_DIR"
@@ -989,13 +1115,12 @@ clone_sillytavern() {
     repo_url=$(get_github_url "$SILLYTAVERN_REPO")
 
     info "克隆仓库..."
-    if run_timeout 300 git clone -b "$branch" --single-branch --depth 1 "$repo_url" "$INSTALL_DIR" 2>&1 | tail -3; then
+    if run_with_timeout 300 git clone -b "$branch" --single-branch --depth 1 "$repo_url" "$INSTALL_DIR" 2>&1 | tail -3; then
         success "仓库克隆完成"
     else
-        # 如果代理失败, 尝试直连
         if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
             warn "加速克隆失败, 尝试直连..."
-            if run_timeout 300 git clone -b "$branch" --single-branch --depth 1 "$SILLYTAVERN_REPO" "$INSTALL_DIR" 2>&1 | tail -3; then
+            if run_with_timeout 300 git clone -b "$branch" --single-branch --depth 1 "$SILLYTAVERN_REPO" "$INSTALL_DIR" 2>&1 | tail -3; then
                 success "仓库克隆完成 (直连)"
             else
                 error "克隆失败, 请检查网络"; exit 1
@@ -1006,8 +1131,11 @@ clone_sillytavern() {
     fi
 
     # 规范化换行符
-    find "$INSTALL_DIR" -name "*.yaml" -exec sed -e 's/\r$//' -i {} \; 2>/dev/null || \
-    find "$INSTALL_DIR" -name "*.yaml" -exec sed -e 's/\r$//' -i '' {} \; 2>/dev/null || true
+    if [[ "$PLATFORM" == "macos" ]]; then
+        find "$INSTALL_DIR" -name "*.yaml" -exec sed -i '' 's/\r$//' {} \; 2>/dev/null || true
+    else
+        find "$INSTALL_DIR" -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
+    fi
 
     # npm install
     step "安装 npm 依赖..."
@@ -1046,7 +1174,7 @@ configure_sillytavern() {
     divider
     echo ""
 
-    # === 远程访问 (listen) ===
+    # === 远程访问 ===
     echo -e "  ${YELLOW}● 远程访问${NC}"
     echo -e "    ${DIM}开启后允许局域网/外网设备访问 (监听 0.0.0.0)${NC}"
     echo -e "    ${DIM}关闭则仅本机可访问 (127.0.0.1)${NC}"
@@ -1055,10 +1183,8 @@ configure_sillytavern() {
     local listen_enabled=false
     if confirm "开启远程访问?"; then
         set_yaml_val "listen" "true" "$config_file"
-        listen_enabled=true
-
-        # 远程访问时自动关闭白名单
         set_yaml_val "whitelistMode" "false" "$config_file"
+        listen_enabled=true
         success "已开启远程访问, 白名单已自动关闭"
     else
         set_yaml_val "listen" "false" "$config_file"
@@ -1103,18 +1229,17 @@ configure_sillytavern() {
         escaped_user=$(escape_sed "$auth_user")
         escaped_pass=$(escape_sed "$auth_pass")
 
-        # 处理 basicAuthUser 嵌套
         if grep -q "basicAuthUser:" "$config_file" 2>/dev/null; then
             sed_i "/basicAuthUser:/,/^[^ #]/{
-                s|\(.*\)username:.*|\1username: \"${escaped_user}\"|
-                s|\(.*\)password:.*|\1password: \"${escaped_pass}\"|
+                s|username:.*|username: \"${escaped_user}\"|
+                s|password:.*|password: \"${escaped_pass}\"|
             }" "$config_file"
         else
-            cat >> "$config_file" << EOF
+            cat >> "$config_file" << AUTHEOF
 basicAuthUser:
   username: "${auth_user}"
   password: "${auth_pass}"
-EOF
+AUTHEOF
         fi
 
         success "认证已开启 (用户: ${auth_user})"
@@ -1141,23 +1266,22 @@ setup_background() {
     divider
     echo ""
 
-    # 显示当前状态
+    # 当前状态
     echo -e "  ${YELLOW}● 当前状态${NC}"
     if command_exists pm2; then
-        echo -e "    PM2: ${GREEN}已安装${NC} ($(pm2 -v 2>/dev/null || echo '?'))"
+        echo -e "    PM2:  ${GREEN}已安装${NC} ($(pm2 -v 2>/dev/null || echo '?'))"
         if pm2_is_running; then
             echo -e "    运行: ${GREEN}● 运行中${NC}"
         else
             echo -e "    运行: ${RED}● 未运行${NC}"
         fi
-        # 检查是否有 startup
         if pm2 describe "$PM2_APP_NAME" &>/dev/null 2>&1; then
             echo -e "    自启: ${GREEN}已注册${NC}"
         else
             echo -e "    自启: ${YELLOW}未注册${NC}"
         fi
     else
-        echo -e "    PM2: ${YELLOW}未安装${NC}"
+        echo -e "    PM2:  ${YELLOW}未安装${NC}"
         echo -e "    ${DIM}PM2 是跨平台进程管理器, 支持后台运行和开机自启${NC}"
     fi
 
@@ -1181,11 +1305,9 @@ setup_background() {
             if command_exists pm2; then
                 if pm2_is_running; then
                     info "SillyTavern 已在后台运行"
-                else
-                    if confirm "立即通过 PM2 启动 SillyTavern?"; then
-                        pm2_start
-                        show_access_info
-                    fi
+                elif confirm "立即通过 PM2 启动 SillyTavern?"; then
+                    pm2_start
+                    show_access_info
                 fi
             fi
             ;;
@@ -1204,49 +1326,12 @@ setup_background() {
     esac
 }
 
-# ==================== 访问信息显示 ====================
-show_access_info() {
-    local port
-    port=$(get_port)
-
-    local listen_mode
-    listen_mode=$(get_yaml_val "listen" "$INSTALL_DIR/config.yaml" 2>/dev/null)
-
-    echo ""
-    divider
-    echo -e "  ${BOLD}访问地址${NC}"
-    divider
-
-    if [[ "$listen_mode" == "true" ]]; then
-        local local_ip public_ip
-        local_ip=$(get_local_ip)
-        public_ip=$(get_public_ip)
-
-        echo -e "  本机访问:   ${CYAN}http://127.0.0.1:${port}${NC}"
-        echo -e "  局域网访问: ${CYAN}http://${local_ip}:${port}${NC}"
-        if [[ -n "$public_ip" ]]; then
-            echo -e "  公网访问:   ${CYAN}http://${public_ip}:${port}${NC}"
-        else
-            echo -e "  公网访问:   ${DIM}(未获取到公网IP, 请确认服务器有公网)${NC}"
-        fi
-
-        if [[ -n "$public_ip" && "$local_ip" != "$public_ip" ]]; then
-            echo -e "  ${DIM}提示: 局域网IP与公网IP不同, 可能需要配置端口转发/NAT${NC}"
-        fi
-    else
-        echo -e "  访问地址: ${CYAN}http://127.0.0.1:${port}${NC}"
-        echo -e "  ${DIM}(仅本机可访问, 如需远程访问请开启监听)${NC}"
-    fi
-    divider
-}
-
 # ==================== 启动/停止/状态 ====================
 start_sillytavern() {
     if ! check_installed; then
         error "SillyTavern 未安装"; return 1
     fi
 
-    # 检查是否已在运行
     if pm2_is_running; then
         info "SillyTavern 已在运行中"
         show_access_info
@@ -1265,7 +1350,10 @@ start_sillytavern() {
         pm2_start
     else
         step "前台启动 SillyTavern..."
+        show_access_info
+        echo ""
         info "按 Ctrl+C 停止运行"
+        echo ""
         cd "$INSTALL_DIR"
         node server.js
         cd - >/dev/null 2>&1
@@ -1301,8 +1389,7 @@ restart_sillytavern() {
 
 show_status() {
     if ! check_installed; then
-        error "SillyTavern 未安装"
-        return 1
+        error "SillyTavern 未安装"; return 1
     fi
 
     print_banner
@@ -1373,7 +1460,6 @@ show_status() {
         echo -e "    离散登录:     $(format_bool "${dl_val:-false}")"
     fi
 
-    # 访问地址
     if [[ "$is_running" == true ]]; then
         show_access_info
     fi
@@ -1392,21 +1478,18 @@ update_sillytavern() {
     local branch
     branch=$(git branch --show-current 2>/dev/null || echo "release")
 
-    # 设置远程 URL (中国加速)
     if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
         git remote set-url origin "$(get_github_url "$SILLYTAVERN_REPO")" 2>/dev/null
     fi
 
-    # 获取远程信息
     info "正在获取远程仓库信息..."
-    if ! run_timeout 30 git fetch --quiet 2>/dev/null; then
+    if ! run_with_timeout 30 git fetch --quiet 2>/dev/null; then
         warn "获取远程信息失败, 请检查网络"
         [[ "$IS_CHINA" == true ]] && git remote set-url origin "$SILLYTAVERN_REPO" 2>/dev/null
         cd - >/dev/null 2>&1
         return 1
     fi
 
-    # 比较本地和远程
     local local_commit remote_commit
     local_commit=$(git rev-parse HEAD 2>/dev/null)
     remote_commit=$(git rev-parse "origin/$branch" 2>/dev/null)
@@ -1420,7 +1503,6 @@ update_sillytavern() {
         return 0
     fi
 
-    # 有更新
     local behind
     behind=$(git rev-list --count HEAD..origin/"$branch" 2>/dev/null || echo "?")
 
@@ -1430,10 +1512,8 @@ update_sillytavern() {
     echo -e "    分支: ${CYAN}${branch}${NC}"
     echo -e "    落后: ${YELLOW}${behind}${NC} 个提交"
     echo ""
-
-    # 显示最近的提交信息
     echo -e "  ${DIM}最近更新内容:${NC}"
-    git log --oneline HEAD..origin/"$branch" 2>/dev/null | head -5 | while read -r line; do
+    git log --oneline HEAD..origin/"$branch" 2>/dev/null | head -5 | while IFS= read -r line; do
         echo -e "    ${DIM}• ${line}${NC}"
     done
     [[ "$behind" != "?" && "$behind" -gt 5 ]] && echo -e "    ${DIM}  ... 还有 $((behind - 5)) 个提交${NC}"
@@ -1447,20 +1527,17 @@ update_sillytavern() {
         return 0
     fi
 
-    # 停止运行
     if pm2_is_running; then
         warn "正在停止 SillyTavern..."
         pm2_stop
     fi
 
-    # 备份配置
     info "备份配置..."
     local backup_dir="$HOME/.ksilly_backup_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     [[ -f "config.yaml" ]] && cp "config.yaml" "$backup_dir/"
     info "配置已备份到: $backup_dir"
 
-    # 拉取更新
     info "拉取更新..."
     if git pull --ff-only 2>/dev/null; then
         success "代码更新完成"
@@ -1471,17 +1548,18 @@ update_sillytavern() {
         success "代码强制更新完成"
     fi
 
-    # 恢复远程 URL
     [[ "$IS_CHINA" == true ]] && git remote set-url origin "$SILLYTAVERN_REPO" 2>/dev/null
 
     # 规范化换行符
-    find . -name "*.yaml" -exec sed -e 's/\r$//' -i {} \; 2>/dev/null || true
+    if [[ "$PLATFORM" == "macos" ]]; then
+        find . -name "*.yaml" -exec sed -i '' 's/\r$//' {} \; 2>/dev/null || true
+    else
+        find . -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
+    fi
 
-    # 更新依赖
     info "更新 npm 依赖..."
     npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -3
 
-    # 恢复配置
     if [[ -f "$backup_dir/config.yaml" ]]; then
         cp "$backup_dir/config.yaml" "config.yaml"
         success "配置文件已恢复"
@@ -1512,10 +1590,8 @@ uninstall_sillytavern() {
     confirm "确定要卸载吗? 此操作不可恢复!" || { info "已取消"; return 0; }
     confirm "再次确认: 删除所有数据?" || { info "已取消"; return 0; }
 
-    # 停止
     pm2_stop
 
-    # 备份数据?
     local data_dir="$INSTALL_DIR/data"
     if [[ -d "$data_dir" ]]; then
         echo ""
@@ -1528,18 +1604,17 @@ uninstall_sillytavern() {
         fi
     fi
 
-    # 移除 PM2
+    # PM2 清理
     if command_exists pm2; then
         pm2 delete "$PM2_APP_NAME" 2>/dev/null || true
         pm2 save --force 2>/dev/null || true
     fi
 
-    # 移除防火墙规则
+    # 防火墙清理
     local port
     port=$(get_port)
     remove_firewall_port "$port"
 
-    # 删除安装目录
     step "删除安装目录..."
     rm -rf "$INSTALL_DIR"
     success "安装目录已删除"
@@ -1558,7 +1633,7 @@ view_logs() {
     fi
 
     if command_exists pm2; then
-        step "SillyTavern 日志 (按 Ctrl+C 退出):"
+        step "SillyTavern 日志 (最近 50 行):"
         echo ""
         pm2 logs "$PM2_APP_NAME" --lines 50 --nostream 2>/dev/null || \
             warn "没有日志或 PM2 中未注册该应用"
@@ -1585,7 +1660,6 @@ modify_config_menu() {
         divider
         echo ""
 
-        # 读取当前值
         local listen_val whitelist_val auth_val port_val ua_val dl_val
         listen_val=$(get_yaml_val "listen" "$config_file")
         whitelist_val=$(get_yaml_val "whitelistMode" "$config_file")
@@ -1594,7 +1668,6 @@ modify_config_menu() {
         ua_val=$(get_yaml_val "enableUserAccounts" "$config_file")
         dl_val=$(get_yaml_val "enableDiscreetLogin" "$config_file")
 
-        # 显示当前状态
         echo -e "  ${YELLOW}● 当前配置${NC}"
         echo -e "    端口:         ${CYAN}${port_val}${NC}"
         echo -e "    远程访问:     $(format_bool "${listen_val:-false}")"
@@ -1621,6 +1694,7 @@ modify_config_menu() {
 
         local choice
         choice=$(read_input "选择" "0")
+        local changed=false
 
         case "$choice" in
             1)
@@ -1631,12 +1705,14 @@ modify_config_menu() {
                     if confirm "关闭远程访问?"; then
                         set_yaml_val "listen" "false" "$config_file"
                         success "已关闭远程访问"
+                        changed=true
                     fi
                 else
                     echo -e "  ${DIM}当前仅本机访问${NC}"
                     if confirm "开启远程访问?"; then
                         set_yaml_val "listen" "true" "$config_file"
                         success "已开启远程访问"
+                        changed=true
                         local p; p=$(get_port)
                         open_firewall_port "$p"
                     fi
@@ -1650,12 +1726,14 @@ modify_config_menu() {
                     if confirm "关闭白名单模式?"; then
                         set_yaml_val "whitelistMode" "false" "$config_file"
                         success "已关闭白名单"
+                        changed=true
                     fi
                 else
-                    echo -e "  ${DIM}白名单已关闭, 所有IP均可访问${NC}"
+                    echo -e "  ${DIM}白名单已关闭${NC}"
                     if confirm "开启白名单模式?"; then
                         set_yaml_val "whitelistMode" "true" "$config_file"
                         success "已开启白名单"
+                        changed=true
                     fi
                 fi
                 ;;
@@ -1664,6 +1742,7 @@ modify_config_menu() {
                 echo -e "  当前: $(format_bool "${auth_val:-false}")"
                 if [[ "${auth_val:-false}" == "true" ]]; then
                     echo -e "  ${DIM}基础认证已开启${NC}"
+                    echo ""
                     echo -e "  ${GREEN}1)${NC} 关闭认证"
                     echo -e "  ${GREEN}2)${NC} 修改用户名/密码"
                     echo -e "  ${RED}0)${NC} 取消"
@@ -1674,13 +1753,13 @@ modify_config_menu() {
                         1)
                             set_yaml_val "basicAuthMode" "false" "$config_file"
                             success "已关闭认证"
+                            changed=true
                             ;;
                         2)
-                            local u p
+                            local u p eu ep
                             u=$(read_input "新用户名")
                             while [[ -z "$u" ]]; do warn "不能为空"; u=$(read_input "新用户名"); done
                             p=$(read_password "新密码")
-                            local eu ep
                             eu=$(escape_sed "$u"); ep=$(escape_sed "$p")
                             if grep -q "basicAuthUser:" "$config_file" 2>/dev/null; then
                                 sed_i "/basicAuthUser:/,/^[^ #]/{
@@ -1689,17 +1768,17 @@ modify_config_menu() {
                                 }" "$config_file"
                             fi
                             success "认证信息已更新"
+                            changed=true
                             ;;
                     esac
                 else
                     echo -e "  ${DIM}基础认证已关闭${NC}"
                     if confirm "开启基础认证?"; then
                         set_yaml_val "basicAuthMode" "true" "$config_file"
-                        local u p
+                        local u p eu ep
                         u=$(read_input "设置用户名")
                         while [[ -z "$u" ]]; do warn "不能为空"; u=$(read_input "设置用户名"); done
                         p=$(read_password "设置密码")
-                        local eu ep
                         eu=$(escape_sed "$u"); ep=$(escape_sed "$p")
                         if grep -q "basicAuthUser:" "$config_file" 2>/dev/null; then
                             sed_i "/basicAuthUser:/,/^[^ #]/{
@@ -1714,6 +1793,7 @@ basicAuthUser:
 AUTHEOF
                         fi
                         success "认证已开启 (用户: $u)"
+                        changed=true
                     fi
                 fi
                 ;;
@@ -1726,6 +1806,7 @@ AUTHEOF
                     if [[ "$np" =~ ^[0-9]+$ ]] && [[ "$np" -ge 1 && "$np" -le 65535 ]]; then
                         set_yaml_val "port" "$np" "$config_file"
                         success "端口已改为: $np"
+                        changed=true
                         local cl; cl=$(get_yaml_val "listen" "$config_file")
                         [[ "$cl" == "true" ]] && open_firewall_port "$np"
                     else
@@ -1741,11 +1822,13 @@ AUTHEOF
                     if confirm "关闭用户账户?"; then
                         set_yaml_val "enableUserAccounts" "false" "$config_file"
                         success "已关闭用户账户"
+                        changed=true
                     fi
                 else
                     if confirm "开启用户账户?"; then
                         set_yaml_val "enableUserAccounts" "true" "$config_file"
                         success "已开启用户账户"
+                        changed=true
                     fi
                 fi
                 ;;
@@ -1757,11 +1840,13 @@ AUTHEOF
                     if confirm "关闭离散登录?"; then
                         set_yaml_val "enableDiscreetLogin" "false" "$config_file"
                         success "已关闭离散登录"
+                        changed=true
                     fi
                 else
                     if confirm "开启离散登录?"; then
                         set_yaml_val "enableDiscreetLogin" "true" "$config_file"
                         success "已开启离散登录"
+                        changed=true
                     fi
                 fi
                 ;;
@@ -1772,8 +1857,9 @@ AUTHEOF
                 done
                 if [[ -n "$editor" ]]; then
                     $editor "$config_file"
+                    changed=true
                 else
-                    error "未找到文本编辑器"
+                    error "未找到文本编辑器 (nano/vim/vi)"
                 fi
                 ;;
             8)
@@ -1784,6 +1870,7 @@ AUTHEOF
                         cp "$df" "$config_file"
                         sed_i 's/\r$//' "$config_file" 2>/dev/null || true
                         success "已重置为默认配置"
+                        changed=true
                     else
                         error "找不到默认配置文件"
                     fi
@@ -1802,7 +1889,7 @@ AUTHEOF
         esac
 
         # 修改后提示重启
-        if [[ "$choice" =~ ^[1-6]$ ]]; then
+        if [[ "$changed" == true ]]; then
             echo ""
             if pm2_is_running; then
                 warn "修改将在重启后生效"
@@ -1812,7 +1899,7 @@ AUTHEOF
             fi
         fi
 
-        pause
+        pause_key
     done
 }
 
@@ -1837,7 +1924,6 @@ full_install() {
     configure_sillytavern
     echo ""
 
-    # 安装 PM2
     install_pm2
     echo ""
 
@@ -1866,12 +1952,18 @@ full_install() {
             echo -e "    ${CYAN}pm2 start sillytavern${NC}"
         fi
         echo -e "    ${CYAN}cd ${INSTALL_DIR} && node server.js${NC}"
-        echo -e "    ${CYAN}bash ${INSTALL_DIR}/ksilly.sh${NC}"
+        if [[ "$PLATFORM" == "windows" ]]; then
+            echo -e "    ${CYAN}双击 ksilly.bat${NC}"
+        else
+            echo -e "    ${CYAN}bash ${INSTALL_DIR}/ksilly.sh${NC}"
+        fi
     fi
 
     echo ""
     if confirm "设置开机自启?"; then
-        pm2_start 2>/dev/null
+        if ! pm2_is_running; then
+            pm2_start 2>/dev/null
+        fi
         pm2_setup_startup
     fi
 }
@@ -1940,41 +2032,40 @@ main_menu() {
                     warn "SillyTavern 已安装: $INSTALL_DIR"
                     confirm "重新安装?" || continue
                 fi
-                detect_platform
                 full_install
-                pause
+                pause_key
                 ;;
             2)
                 detect_network
                 update_sillytavern
-                pause
+                pause_key
                 ;;
             3)
                 uninstall_sillytavern
-                pause
+                pause_key
                 ;;
             4)
                 start_sillytavern
-                pause
+                pause_key
                 ;;
             5)
                 stop_sillytavern
-                pause
+                pause_key
                 ;;
             6)
                 restart_sillytavern
-                pause
+                pause_key
                 ;;
             7)
                 show_status
-                pause
+                pause_key
                 ;;
             8)
                 modify_config_menu
                 ;;
             9)
                 view_logs
-                pause
+                pause_key
                 ;;
             10)
                 if ! check_installed; then
@@ -1982,7 +2073,7 @@ main_menu() {
                 else
                     setup_background
                 fi
-                pause
+                pause_key
                 ;;
             0|"")
                 echo ""
@@ -2000,9 +2091,8 @@ main_menu() {
 
 # ==================== 入口 ====================
 main() {
-    # 检查 stdin 是否为终端 (防止 curl | bash 导致 read 卡死)
+    # 防止 curl | bash 导致 stdin 不可用
     if [[ ! -t 0 ]]; then
-        # 尝试重定向到 /dev/tty
         if [[ -e /dev/tty ]]; then
             exec </dev/tty
         else
@@ -2023,14 +2113,14 @@ main() {
             detect_network
             update_sillytavern
             ;;
-        start)   start_sillytavern ;;
-        stop)    stop_sillytavern ;;
-        restart) restart_sillytavern ;;
-        status)  show_status ;;
+        start)    start_sillytavern ;;
+        stop)     stop_sillytavern ;;
+        restart)  restart_sillytavern ;;
+        status)   show_status ;;
+        config)   modify_config_menu ;;
+        logs)     view_logs ;;
         uninstall) uninstall_sillytavern ;;
-        config)  modify_config_menu ;;
-        logs)    view_logs ;;
-        "")      main_menu ;;
+        "")       main_menu ;;
         *)
             echo "用法: $0 {install|update|start|stop|restart|status|config|logs|uninstall}"
             echo "  不带参数进入交互式菜单"
