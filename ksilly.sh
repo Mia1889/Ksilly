@@ -1,20 +1,20 @@
 #!/bin/bash
 #
 #  ██╗  ██╗███████╗██╗██╗     ██╗  ██╗   ██╗
-#  ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝       ╱|、
-#  █████╔╝ ███████╗██║██║     ██║   ╚████╔╝       (˚ˎ 。7
-#  ██╔═██╗ ╚════██║██║██║     ██║    ╚██╔╝         |、˜〵
-#  ██║  ██╗███████║██║███████╗███████╗██║           じしˍ,)ノ
+#  ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝
+#  █████╔╝ ███████╗██║██║     ██║   ╚████╔╝
+#  ██╔═██╗ ╚════██║██║██║     ██║    ╚██╔╝
+#  ██║  ██╗███████║██║███████╗███████╗██║
 #  ╚═╝  ╚═╝╚══════╝╚═╝╚══════╝╚══════╝╚═╝
 #
 #  Ksilly - 简单 SillyTavern 部署脚本
 #  作者: Mia1889
 #  仓库: https://github.com/Mia1889/Ksilly
-#  版本: 2.2.3
+#  版本: 2.2.4
 #
 
 # ==================== 全局常量 ====================
-readonly SCRIPT_VERSION="2.2.3"
+readonly SCRIPT_VERSION="2.2.4"
 readonly KSILLY_CONF="$HOME/.ksilly.conf"
 readonly DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
 readonly SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
@@ -54,6 +54,8 @@ readonly BLUE='\033[0;34m'
 readonly PURPLE='\033[0;35m'
 readonly CYAN='\033[0;36m'
 readonly PINK='\033[38;5;213m'
+readonly ORANGE='\033[38;5;214m'
+readonly FOX='\033[38;5;208m'
 readonly BOLD='\033[1m'
 readonly DIM='\033[2m'
 readonly NC='\033[0m'
@@ -159,14 +161,18 @@ print_banner() {
     clear
     echo ""
     echo -e "${PINK}  ██╗  ██╗███████╗██╗██╗     ██╗  ██╗   ██╗${NC}"
-    echo -e "${PINK}  ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝${NC}       ${PINK}╱|、${NC}"
-    echo -e "${PINK}  █████╔╝ ███████╗██║██║     ██║   ╚████╔╝${NC}       ${PINK}(˚ˎ 。7${NC}"
-    echo -e "${PINK}  ██╔═██╗ ╚════██║██║██║     ██║    ╚██╔╝${NC}         ${PINK}|、˜〵${NC}"
-    echo -e "${PINK}  ██║  ██╗███████║██║███████╗███████╗██║${NC}           ${PINK}じしˍ,)ノ${NC}"
+    echo -e "${PINK}  ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝${NC}"
+    echo -e "${PINK}  █████╔╝ ███████╗██║██║     ██║   ╚████╔╝${NC}"
+    echo -e "${PINK}  ██╔═██╗ ╚════██║██║██║     ██║    ╚██╔╝${NC}"
+    echo -e "${PINK}  ██║  ██╗███████║██║███████╗███████╗██║${NC}"
     echo -e "${PINK}  ╚═╝  ╚═╝╚══════╝╚═╝╚══════╝╚══════╝╚═╝${NC}"
     echo ""
     echo -e "  ${BOLD}才不是为杂鱼准备的部署脚本呢${NC} ${PINK}♡${NC} ${DIM}v${SCRIPT_VERSION}${NC}"
     echo -e "  ${DIM}by Mia1889 · github.com/Mia1889/Ksilly${NC}"
+    echo ""
+    echo -e "        ${FOX}▄▀▀▀▄${NC}  ${ORANGE}▄▀▀▀▄${NC}"
+    echo -e "       ${FOX}█${ORANGE}▀█▀█▀${FOX}█${NC}  ${DIM}ﾉ ♡ ﾉ${NC}"
+    echo -e "        ${FOX}▀▄█▄▀${NC}  ${DIM}Ksilly~${NC}"
     divider
     echo ""
 }
@@ -183,7 +189,7 @@ step() {
 }
 
 divider() {
-    echo -e "  ${PINK}♡${NC}${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}${PINK}♡${NC}"
+    echo -e "  ${FOX}»${NC}${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}${FOX}«${NC}"
 }
 
 # ==================== 输入函数 ====================
@@ -445,13 +451,13 @@ save_script() {
 
     [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]] && url="${GITHUB_PROXY}${url}"
 
-    if curl -fsSL --connect-timeout 10 "$url" -o "$target" 2>/dev/null; then
+    if curl -fsSL --connect-timeout 10 --max-time 30 "$url" -o "$target" 2>/dev/null; then
         chmod +x "$target"
         return 0
     fi
 
     if [[ "$IS_CHINA" == true ]]; then
-        if curl -fsSL --connect-timeout 10 "$SCRIPT_RAW_URL" -o "$target" 2>/dev/null; then
+        if curl -fsSL --connect-timeout 10 --max-time 30 "$SCRIPT_RAW_URL" -o "$target" 2>/dev/null; then
             chmod +x "$target"
             return 0
         fi
@@ -517,6 +523,11 @@ detect_os() {
 detect_network() {
     step "帮杂鱼看看网络环境~"
 
+    if [[ "$IS_TERMUX" == true ]]; then
+        detect_network_termux
+        return
+    fi
+
     local china_test=false
 
     if curl -s --connect-timeout 3 --max-time 5 "https://www.baidu.com" &>/dev/null; then
@@ -538,6 +549,47 @@ detect_network() {
     else
         IS_CHINA=false
         info "能直连 GitHub~运气不错嘛杂鱼♡"
+    fi
+}
+
+detect_network_termux() {
+    local china_test=false
+
+    if curl -s --connect-timeout 2 --max-time 4 "https://www.baidu.com" &>/dev/null; then
+        china_test=true
+        if curl -s --connect-timeout 2 --max-time 4 "https://www.google.com" &>/dev/null; then
+            china_test=false
+        fi
+    fi
+
+    if [[ "$china_test" == false ]]; then
+        if curl -s --connect-timeout 3 --max-time 5 "https://npmmirror.com" &>/dev/null; then
+            if ! curl -s --connect-timeout 2 --max-time 4 "https://github.com" &>/dev/null; then
+                china_test=true
+            fi
+        fi
+    fi
+
+    if [[ "$china_test" == false ]]; then
+        local country
+        country=$(curl -s --connect-timeout 4 --max-time 6 "https://ipapi.co/country_code/" 2>/dev/null || \
+                  curl -s --connect-timeout 4 --max-time 6 "https://myip.ipip.net/" 2>/dev/null | grep -o 'CN' | head -1 || true)
+        [[ "$country" == "CN" ]] && china_test=true
+    fi
+
+    if [[ "$china_test" == true ]]; then
+        IS_CHINA=true
+        info "大陆网络~人家帮你配加速♡"
+        find_github_proxy
+    else
+        IS_CHINA=false
+        if ! curl -s --connect-timeout 3 --max-time 5 "https://github.com" &>/dev/null; then
+            warn "GitHub 连不上~强制启用加速模式♡"
+            IS_CHINA=true
+            find_github_proxy
+        else
+            info "能直连 GitHub~运气不错嘛杂鱼♡"
+        fi
     fi
 }
 
@@ -564,11 +616,123 @@ get_github_url() {
     fi
 }
 
+# ==================== npm 镜像 ====================
+
+ensure_npm_mirror() {
+    if [[ "$IS_CHINA" == true ]]; then
+        npm config set registry https://registry.npmmirror.com 2>/dev/null || true
+        info "npm 镜像已设为 npmmirror~♡"
+    fi
+}
+
+# ==================== Termux 镜像源 ====================
+
+setup_termux_mirror() {
+    [[ "$IS_CHINA" != true ]] && return 0
+
+    if command_exists termux-change-repo; then
+        info "检测到大陆网络~切换 Termux 镜像源♡"
+        local mirror_list="$PREFIX/etc/termux/chosen_mirrors"
+        local sources_dir="$PREFIX/etc/apt/sources.list.d"
+
+        if [[ -f "$PREFIX/etc/apt/sources.list" ]]; then
+            if ! grep -q "mirrors.tuna\|mirrors.ustc\|mirrors.bfsu\|mirrors.aliyun" "$PREFIX/etc/apt/sources.list" 2>/dev/null; then
+                cp "$PREFIX/etc/apt/sources.list" "$PREFIX/etc/apt/sources.list.bak" 2>/dev/null || true
+                sed -i 's|https://packages.termux.dev/apt/termux-main|https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main|g' \
+                    "$PREFIX/etc/apt/sources.list" 2>/dev/null || true
+                info "Termux 源已切换为清华镜像~♡"
+            else
+                info "Termux 已使用国内镜像~♡"
+            fi
+        fi
+    fi
+}
+
+# ==================== git clone 重试封装 ====================
+
+git_clone_with_retry() {
+    local branch="$1"
+    local dest="$2"
+    local max_retry=3
+    local attempt=0
+
+    local urls=()
+
+    if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
+        urls+=("${GITHUB_PROXY}${SILLYTAVERN_REPO}")
+    fi
+    urls+=("$SILLYTAVERN_REPO")
+
+    for proxy in "${GITHUB_PROXIES[@]}"; do
+        local pu="${proxy}${SILLYTAVERN_REPO}"
+        local already=false
+        for u in "${urls[@]}"; do [[ "$u" == "$pu" ]] && already=true && break; done
+        [[ "$already" == false ]] && urls+=("$pu")
+    done
+
+    for url in "${urls[@]}"; do
+        attempt=$(( attempt + 1 ))
+        echo -e "    ${DIM}尝试源 ${attempt}: ${url}${NC}"
+        if spin "克隆仓库中~杂鱼耐心等♡" \
+            git clone -b "$branch" --single-branch --depth 1 \
+                --config http.lowSpeedLimit=1024 \
+                --config http.lowSpeedTime=30 \
+                "$url" "$dest" ; then
+            success "仓库克隆成功~♡"
+            return 0
+        fi
+        [[ -d "$dest" ]] && rm -rf "$dest"
+        [[ $attempt -ge $max_retry ]] && break
+        warn "失败~换下一个源♡"
+    done
+
+    error "所有源都失败了~杂鱼检查网络吧♡"
+    return 1
+}
+
+git_clone_plugin_with_retry() {
+    local name="$1"
+    local dest="$2"
+    local repo_cn="$3"
+    local repo_intl="$4"
+
+    local urls=()
+
+    if [[ "$IS_CHINA" == true ]]; then
+        urls+=("$repo_cn")
+        [[ -n "$GITHUB_PROXY" ]] && urls+=("${GITHUB_PROXY}${repo_intl}")
+        urls+=("$repo_intl")
+    else
+        urls+=("$repo_intl")
+        urls+=("$repo_cn")
+    fi
+
+    for url in "${urls[@]}"; do
+        echo -e "    ${DIM}源: ${url}${NC}"
+        if spin "克隆 ${name} 中~杂鱼等等♡" \
+            git clone --depth 1 \
+                --config http.lowSpeedLimit=1024 \
+                --config http.lowSpeedTime=30 \
+                "$url" "$dest" ; then
+            return 0
+        fi
+        [[ -d "$dest" ]] && rm -rf "$dest"
+        warn "这个源失败了~换下一个♡"
+    done
+
+    return 1
+}
+
 # ==================== 依赖安装 ====================
 
 update_pkg_cache() {
     case "$PKG_MANAGER" in
-        pkg)    spin "刷新软件包索引~杂鱼等着♡" pkg update -y ;;
+        pkg)
+            if [[ "$IS_CHINA" == true ]]; then
+                setup_termux_mirror
+            fi
+            spin "刷新软件包索引~杂鱼等着♡" pkg update -y
+            ;;
         apt)    spin "刷新软件包索引~杂鱼等着♡" $NEED_SUDO apt-get update -qq ;;
         yum)    spin "刷新软件包索引~杂鱼等着♡" $NEED_SUDO yum makecache -q ;;
         dnf)    spin "刷新软件包索引~杂鱼等着♡" $NEED_SUDO dnf makecache -q ;;
@@ -605,9 +769,20 @@ check_node_version() {
     [[ -n "$ver" && "$ver" -ge "$MIN_NODE_VERSION" ]] 2>/dev/null
 }
 
+refresh_path() {
+    if [[ "$IS_TERMUX" == true ]]; then
+        export PATH="$PREFIX/bin:$PATH"
+    fi
+    hash -r 2>/dev/null || true
+    if [[ -d "/usr/local/bin" ]]; then
+        export PATH="/usr/local/bin:$PATH"
+    fi
+}
+
 install_nodejs() {
     if check_node_version; then
         info "Node.js $(node -v) 已经有了~♡"
+        ensure_npm_mirror
         return 0
     fi
 
@@ -623,29 +798,47 @@ install_nodejs() {
         install_nodejs_standard
     fi
 
-    hash -r 2>/dev/null || true
+    refresh_path
 
     if check_node_version; then
         info "Node.js $(node -v) 装好了~厉害吧♡"
+        ensure_npm_mirror
     else
-        error "Node.js 装不上~杂鱼的机器是不是太烂了♡"; return 1
-    fi
-
-    if [[ "$IS_CHINA" == true ]]; then
-        npm config set registry https://registry.npmmirror.com 2>/dev/null
-        info "npm 镜像设好了~人家真贴心♡"
+        error "Node.js 装不上~杂鱼的机器是不是太烂了♡"
+        return 1
     fi
 }
 
 install_nodejs_termux() {
-    spin "Termux 装 Node.js 中~♡" pkg install -y nodejs 2>/dev/null || \
-    spin "换个方式试试~♡" pkg install -y nodejs-lts
+    if spin "Termux 装 Node.js 中~♡" pkg install -y nodejs 2>/dev/null; then
+        refresh_path
+        if check_node_version; then
+            return 0
+        fi
+    fi
+
+    warn "nodejs 失败~试试 nodejs-lts♡"
+    if spin "Termux 装 nodejs-lts 中~♡" pkg install -y nodejs-lts 2>/dev/null; then
+        refresh_path
+        if check_node_version; then
+            return 0
+        fi
+    fi
+
+    error "Termux 装 Node.js 失败~杂鱼试试手动 pkg install nodejs♡"
+    return 1
 }
 
 install_nodejs_standard() {
     case "$PKG_MANAGER" in
         apt)
-            spin "准备 NodeSource 仓库~♡" $NEED_SUDO apt-get install -y -qq ca-certificates curl gnupg
+            spin "准备基础工具~♡" $NEED_SUDO apt-get install -y -qq ca-certificates curl gnupg
+
+            if [[ "$IS_CHINA" == true ]]; then
+                install_nodejs_binary "https://npmmirror.com/mirrors/node"
+                return
+            fi
+
             $NEED_SUDO mkdir -p /etc/apt/keyrings
             curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
                 | $NEED_SUDO gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
@@ -655,6 +848,10 @@ install_nodejs_standard() {
             spin "安装 Node.js 中~杂鱼耐心等♡" $NEED_SUDO apt-get install -y -qq nodejs
             ;;
         yum|dnf)
+            if [[ "$IS_CHINA" == true ]]; then
+                install_nodejs_binary "https://npmmirror.com/mirrors/node"
+                return
+            fi
             spin_cmd "配置 NodeSource~♡" "curl -fsSL https://rpm.nodesource.com/setup_20.x | $NEED_SUDO bash -"
             spin "安装 Node.js 中~杂鱼耐心等♡" $NEED_SUDO $PKG_MANAGER install -y nodejs
             ;;
@@ -685,15 +882,21 @@ install_nodejs_binary() {
     local tmp_dir
     tmp_dir=$(mktemp -d)
 
-    spin "下载 Node.js ${node_ver} 中~杂鱼等一下♡" curl -fSL -o "${tmp_dir}/${filename}" "${mirror}/${node_ver}/${filename}"
+    spin "下载 Node.js ${node_ver} 中~杂鱼等一下♡" \
+        curl -fSL --connect-timeout 15 --max-time 300 \
+            -o "${tmp_dir}/${filename}" \
+            "${mirror}/${node_ver}/${filename}"
 
     if [[ $? -eq 0 ]]; then
-        spin_cmd "解压安装中~♡" "cd '${tmp_dir}' && tar xf '${filename}' && ${NEED_SUDO:+$NEED_SUDO }cp -rf 'node-${node_ver}-linux-${arch}'/{bin,include,lib,share} /usr/local/ 2>/dev/null || ${NEED_SUDO:+$NEED_SUDO }cp -rf 'node-${node_ver}-linux-${arch}'/{bin,include,lib} /usr/local/"
+        spin_cmd "解压安装中~♡" "cd '${tmp_dir}' && tar xf '${filename}' && \
+            ${NEED_SUDO:+$NEED_SUDO }cp -rf 'node-${node_ver}-linux-${arch}'/{bin,include,lib,share} /usr/local/ 2>/dev/null || \
+            ${NEED_SUDO:+$NEED_SUDO }cp -rf 'node-${node_ver}-linux-${arch}'/{bin,include,lib} /usr/local/"
         rm -rf "$tmp_dir"
-        hash -r 2>/dev/null || true
+        refresh_path
     else
         rm -rf "$tmp_dir"
-        error "Node.js 下载失败了~网络太烂了吧杂鱼♡"; return 1
+        error "Node.js 下载失败了~网络太烂了吧杂鱼♡"
+        return 1
     fi
 }
 
@@ -1635,13 +1838,15 @@ get_plugin_dir() {
 
 is_plugin_installed() {
     local folder="$1"
-    local plugin_path="$(get_plugin_dir)/$folder"
+    local plugin_path
+    plugin_path="$(get_plugin_dir)/$folder"
     [[ -d "$plugin_path" && "$(ls -A "$plugin_path" 2>/dev/null)" ]]
 }
 
 get_plugin_version() {
     local folder="$1"
-    local plugin_path="$(get_plugin_dir)/$folder"
+    local plugin_path
+    plugin_path="$(get_plugin_dir)/$folder"
 
     if [[ -f "$plugin_path/manifest.json" ]]; then
         local ver
@@ -1689,41 +1894,14 @@ install_single_plugin() {
         fi
     fi
 
-    local repo_url
-    if [[ "$IS_CHINA" == true ]]; then
-        repo_url="$repo_cn"
-        info "大陆网络~用镜像源安装♡"
-    else
-        repo_url="$repo_intl"
-        info "国际网络~直连安装♡"
-    fi
-
-    echo -e "    仓库: ${DIM}${repo_url}${NC}"
-
-    if spin "克隆 ${name} 中~杂鱼等等♡" git clone --depth 1 "$repo_url" "$target_path"; then
+    if git_clone_plugin_with_retry "$name" "$target_path" "$repo_cn" "$repo_intl"; then
         success "${name} 安装好了~♡"
         echo -e "    版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
         echo -e "    路径: ${DIM}${target_path}${NC}"
         return 0
     fi
 
-    warn "第一个源失败了~换一个试试♡"
-    local fallback_url
-    if [[ "$IS_CHINA" == true ]]; then
-        fallback_url=$(get_github_url "$repo_intl")
-    else
-        fallback_url="$repo_cn"
-    fi
-
-    echo -e "    备用: ${DIM}${fallback_url}${NC}"
-
-    if spin "用备用源克隆 ${name} 中~♡" git clone --depth 1 "$fallback_url" "$target_path"; then
-        success "${name} 安装好了~(用的备用源) ♡"
-        echo -e "    版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
-        return 0
-    fi
-
-    error "${name} 装不上~两个源都挂了杂鱼检查网络吧♡"
+    error "${name} 装不上~所有源都失败了杂鱼检查网络吧♡"
     return 1
 }
 
@@ -1736,7 +1914,8 @@ uninstall_single_plugin() {
         return 0
     fi
 
-    local target_path="$(get_plugin_dir)/$folder"
+    local target_path
+    target_path="$(get_plugin_dir)/$folder"
     echo -e "    版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
     echo -e "    路径: ${DIM}${target_path}${NC}"
     echo ""
@@ -1763,7 +1942,8 @@ update_single_plugin() {
         return
     fi
 
-    local target_path="$(get_plugin_dir)/$folder"
+    local target_path
+    target_path="$(get_plugin_dir)/$folder"
 
     if [[ ! -d "$target_path/.git" ]]; then
         warn "${name} 不是用 git 装的~没法更新♡"
@@ -1797,7 +1977,20 @@ update_single_plugin() {
             success "${name} 强制更新好了~♡"
             echo -e "    新版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
         else
-            error "${name} 更新失败了~杂鱼的网络有问题♡"
+            warn "主源失败~换备用源重试♡"
+            local fallback_url
+            if [[ "$IS_CHINA" == true ]]; then
+                fallback_url=$(get_github_url "$repo_intl")
+            else
+                fallback_url="$repo_cn"
+            fi
+            git remote set-url origin "$fallback_url" 2>/dev/null
+            if spin_cmd "备用源更新 ${name}~♡" "cd '$target_path' && git fetch --all 2>/dev/null && git reset --hard 'origin/$branch' 2>/dev/null"; then
+                success "${name} 更新好了~(备用源) ♡"
+                echo -e "    新版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
+            else
+                error "${name} 更新失败了~杂鱼的网络有问题♡"
+            fi
         fi
     fi
 
@@ -2000,29 +2193,19 @@ clone_sillytavern() {
     [[ "$branch_choice" == "2" ]] && branch="staging"
     info "分支: $branch ~♡"
 
-    local repo_url
-    repo_url=$(get_github_url "$SILLYTAVERN_REPO")
-
-    if ! spin "克隆仓库中~杂鱼耐心等♡" git clone -b "$branch" --single-branch --depth 1 "$repo_url" "$INSTALL_DIR"; then
-        if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
-            warn "代理不行~试试直连♡"
-            if ! spin "直连克隆中~♡" git clone -b "$branch" --single-branch --depth 1 "$SILLYTAVERN_REPO" "$INSTALL_DIR"; then
-                error "克隆失败了~杂鱼检查一下网络吧♡"; return 1
-            fi
-        else
-            error "克隆失败了~杂鱼检查一下网络吧♡"; return 1
-        fi
-    fi
-    success "仓库拉好了~♡"
+    git_clone_with_retry "$branch" "$INSTALL_DIR" || return 1
 
     find "$INSTALL_DIR" -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
 
     step "装 npm 依赖~杂鱼别急♡"
+    ensure_npm_mirror
     cd "$INSTALL_DIR"
     if spin "npm install 中~这个比较慢哦杂鱼♡" npm install --no-audit --no-fund; then
         success "依赖装好了~♡"
     else
-        error "npm 依赖装不上~杂鱼的环境有问题吧♡"; cd - >/dev/null; return 1
+        error "npm 依赖装不上~杂鱼的环境有问题吧♡"
+        cd - >/dev/null
+        return 1
     fi
     cd - >/dev/null
 
@@ -2041,7 +2224,8 @@ configure_sillytavern() {
             sed -i 's/\r$//' "$config_file"
             info "配置文件生成好了~♡"
         else
-            error "连 default.yaml 都没有~仓库是不是坏了杂鱼♡"; return 1
+            error "连 default.yaml 都没有~仓库是不是坏了杂鱼♡"
+            return 1
         fi
     fi
 
@@ -2203,8 +2387,6 @@ start_sillytavern() {
             fi
             ;;
         2)
-            local port
-            port=$(get_port)
             step "前台启动~♡"
             info "按 Ctrl+C 就能停哦~♡"
 
@@ -2432,6 +2614,7 @@ do_update() {
 
     find . -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
 
+    ensure_npm_mirror
     spin "更新 npm 依赖中~♡" npm install --no-audit --no-fund
 
     if [[ -f "$backup_dir/config.yaml" ]]; then
@@ -2993,7 +3176,7 @@ full_install() {
     save_config
 
     step "保存管理脚本~♡"
-    if spin "保存脚本中~♡" bash -c "true" && save_script; then
+    if save_script; then
         success "脚本保存在: ${INSTALL_DIR}/ksilly.sh ~♡"
         info "以后直接跑: ${CYAN}bash ${INSTALL_DIR}/ksilly.sh${NC} 就行了杂鱼♡"
     else
@@ -3154,10 +3337,10 @@ main_menu() {
                 ;;
             0)
                 echo ""
-                echo -e "  ${PINK}╱|、${NC}"
-                echo -e "  ${PINK}(˚ˎ 。7${NC}  ${DIM}哼~走了就走了~才不会想你呢杂鱼♡ 👋${NC}"
-                echo -e "  ${PINK} |、˜〵${NC}"
-                echo -e "  ${PINK} じしˍ,)ノ${NC}"
+                echo -e "  ${FOX}  /\\_/\\${NC}"
+                echo -e "  ${FOX} ( ^ω^)${NC}  ${DIM}哼~走了就走了~才不会想你呢杂鱼♡ 👋${NC}"
+                echo -e "  ${ORANGE} / >🦊${NC}"
+                echo -e "  ${FOX}(_/\\_)${NC}"
                 echo ""
                 exit 0
                 ;;
