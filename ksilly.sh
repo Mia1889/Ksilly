@@ -10,17 +10,18 @@
 #  Ksilly - 简单 SillyTavern 部署脚本
 #  作者: Mia1889
 #  仓库: https://github.com/Mia1889/Ksilly
-#  版本: 2.0.0
+#  版本: 2.1.0
 #
 
 # ==================== 全局常量 ====================
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.1.0"
 KSILLY_CONF="$HOME/.ksilly.conf"
 DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
 SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
 SCRIPT_RAW_URL="https://raw.githubusercontent.com/Mia1889/Ksilly/main/ksilly.sh"
 SERVICE_NAME="sillytavern"
 MIN_NODE_VERSION=18
+LOG_FILE="/tmp/ksilly_install.log"
 GITHUB_PROXIES=(
     "https://ghfast.top/"
     "https://gh-proxy.com/"
@@ -34,6 +35,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
+PINK='\033[38;5;206m'
 BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
@@ -49,15 +51,149 @@ CURRENT_USER=$(whoami)
 NEED_SUDO=""
 UPDATE_BEHIND=0
 CACHED_PUBLIC_IP=""
+PROGRESS_TOTAL=0
+PROGRESS_CURRENT=0
 
 # ==================== 信号处理 ====================
-trap 'echo ""; warn "操作已取消"; exit 130' INT
+trap 'echo ""; warn "哈？杂鱼要跑路了吗～♡"; exit 130' INT
+
+# ==================== 日志管理 ====================
+
+init_log() {
+    echo "=== Ksilly 安装日志 $(date) ===" > "$LOG_FILE"
+}
+
+log_cmd() {
+    echo "[$(date '+%H:%M:%S')] $*" >> "$LOG_FILE" 2>&1
+}
+
+# 静默运行命令，输出重定向到日志
+run_silent() {
+    local desc="$1"
+    shift
+    log_cmd "执行: $*"
+    if "$@" >> "$LOG_FILE" 2>&1; then
+        log_cmd "成功: $desc"
+        return 0
+    else
+        log_cmd "失败: $desc"
+        return 1
+    fi
+}
+
+# ==================== 进度条函数 ====================
+
+# 带动画的spinner
+spin() {
+    local pid=$1
+    local msg="$2"
+    local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local i=0
+    tput civis 2>/dev/null  # 隐藏光标
+    while kill -0 "$pid" 2>/dev/null; do
+        local c=${spinstr:i++%${#spinstr}:1}
+        printf "\r  ${PINK}%s${NC} %s" "$c" "$msg" >&2
+        sleep 0.1
+    done
+    tput cnorm 2>/dev/null  # 恢复光标
+    printf "\r\033[K" >&2
+}
+
+# 显示进度条
+# 用法: show_progress 当前值 总值 "描述"
+show_progress() {
+    local current=$1
+    local total=$2
+    local desc="$3"
+    local width=30
+    local percent=$((current * 100 / total))
+    local filled=$((current * width / total))
+    local empty=$((width - filled))
+
+    local bar=""
+    for ((i=0; i<filled; i++)); do bar+="█"; done
+    for ((i=0; i<empty; i++)); do bar+="░"; done
+
+    printf "\r  ${PINK}▸${NC} %-20s ${CYAN}[%s]${NC} ${BOLD}%3d%%${NC}" "$desc" "$bar" "$percent" >&2
+
+    if [[ $current -eq $total ]]; then
+        echo "" >&2
+    fi
+}
+
+# 整体安装进度管理
+set_total_steps() {
+    PROGRESS_TOTAL=$1
+    PROGRESS_CURRENT=0
+}
+
+advance_progress() {
+    local desc="$1"
+    PROGRESS_CURRENT=$((PROGRESS_CURRENT + 1))
+    show_progress $PROGRESS_CURRENT $PROGRESS_TOTAL "$desc"
+}
+
+# 运行命令并显示spinner动画
+run_with_spinner() {
+    local msg="$1"
+    shift
+    (
+        "$@" >> "$LOG_FILE" 2>&1
+    ) &
+    local cmd_pid=$!
+    spin $cmd_pid "$msg"
+    wait $cmd_pid
+    return $?
+}
+
+# 运行命令并显示模拟进度条
+run_with_progress() {
+    local msg="$1"
+    shift
+
+    # 在后台运行实际命令
+    (
+        "$@" >> "$LOG_FILE" 2>&1
+    ) &
+    local cmd_pid=$!
+
+    # 模拟进度（无法知道真实进度时使用）
+    local progress=0
+    local max_fake=90
+    tput civis 2>/dev/null
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+        if [[ $progress -lt $max_fake ]]; then
+            progress=$((progress + 1))
+            # 越接近90越慢
+            local delay
+            if [[ $progress -lt 30 ]]; then
+                delay=0.1
+            elif [[ $progress -lt 60 ]]; then
+                delay=0.15
+            elif [[ $progress -lt 80 ]]; then
+                delay=0.25
+            else
+                delay=0.5
+            fi
+            show_progress $progress 100 "$msg"
+            sleep $delay
+        else
+            sleep 0.2
+        fi
+    done
+
+    wait $cmd_pid
+    local exit_code=$?
+    show_progress 100 100 "$msg"
+    tput cnorm 2>/dev/null
+    return $exit_code
+}
 
 # ==================== 输出函数 ====================
 
 print_banner() {
     clear
-    echo -e "${CYAN}"
+    echo -e "${PINK}"
     cat << 'BANNER'
   ██╗  ██╗███████╗██╗██╗     ██╗  ██╗   ██╗
   ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝
@@ -69,6 +205,7 @@ BANNER
     echo -e "${NC}"
     echo -e "  ${BOLD}SillyTavern 一键部署脚本${NC} ${DIM}v${SCRIPT_VERSION}${NC}"
     echo -e "  ${DIM}by Mia1889 · github.com/Mia1889/Ksilly${NC}"
+    echo -e "  ${PINK}♡${NC} ${DIM}本小姐亲自为杂鱼服务呢～${NC}"
     divider
     echo ""
 }
@@ -76,12 +213,12 @@ BANNER
 info()    { echo -e "  ${GREEN}✓${NC} $1"; }
 warn()    { echo -e "  ${YELLOW}⚠${NC} $1"; }
 error()   { echo -e "  ${RED}✗${NC} $1"; }
-ask()     { echo -e "  ${BLUE}?${NC} $1"; }
+ask()     { echo -e "  ${PINK}♡${NC} $1"; }
 success() { echo -e "  ${GREEN}★${NC} $1"; }
 
 step() {
     echo ""
-    echo -e "  ${CYAN}▸ $1${NC}"
+    echo -e "  ${PINK}▸ $1${NC}"
 }
 
 divider() {
@@ -94,12 +231,12 @@ confirm() {
     local prompt="$1"
     local result=""
     while true; do
-        echo -ne "  ${BLUE}?${NC} ${prompt} ${DIM}(y/n)${NC}: " >&2
+        echo -ne "  ${PINK}♡${NC} ${prompt} ${DIM}(y/n)${NC}: " >&2
         read -r result
         case "$result" in
             [yY]|[yY][eE][sS]) return 0 ;;
             [nN]|[nN][oO]) return 1 ;;
-            *) warn "请输入 y 或 n" ;;
+            *) warn "y 或 n 都分不清吗，杂鱼～♡" ;;
         esac
     done
 }
@@ -109,9 +246,9 @@ read_input() {
     local default="${2:-}"
     local result=""
     if [[ -n "$default" ]]; then
-        echo -ne "  ${BLUE}→${NC} ${prompt} ${DIM}[$default]${NC}: " >&2
+        echo -ne "  ${PINK}→${NC} ${prompt} ${DIM}[$default]${NC}: " >&2
     else
-        echo -ne "  ${BLUE}→${NC} ${prompt}: " >&2
+        echo -ne "  ${PINK}→${NC} ${prompt}: " >&2
     fi
     read -r result
     [[ -z "$result" && -n "$default" ]] && result="$default"
@@ -121,13 +258,13 @@ read_input() {
 read_password() {
     local prompt="$1"
     local result=""
-    echo -e "  ${YELLOW}⚠ 提示: 输入密码时屏幕不会显示任何字符，这是正常的安全行为${NC}" >&2
+    echo -e "  ${YELLOW}⚠ 输入密码时屏幕不会显示字符哦，不是坏了，杂鱼别慌～♡${NC}" >&2
     while [[ -z "$result" ]]; do
-        echo -ne "  ${BLUE}→${NC} ${prompt}: " >&2
+        echo -ne "  ${PINK}→${NC} ${prompt}: " >&2
         read -rs result
         echo "" >&2
         if [[ -z "$result" ]]; then
-            warn "密码不能为空，请重新输入"
+            warn "密码都能输空？真是杂鱼呢～再来一次♡"
         fi
     done
     echo "$result"
@@ -135,7 +272,7 @@ read_password() {
 
 pause_key() {
     echo ""
-    read -rp "  按 Enter 继续..."
+    read -rp "  按 Enter 继续...杂鱼♡"
 }
 
 # ==================== 工具函数 ====================
@@ -152,7 +289,7 @@ get_sudo() {
     elif command_exists sudo; then
         NEED_SUDO="sudo"
     else
-        error "需要 root 权限但未找到 sudo，请以 root 用户运行"
+        error "需要 root 权限但没有 sudo...杂鱼连权限都没有吗～♡"
         return 1
     fi
 }
@@ -217,7 +354,6 @@ get_local_ip() {
 }
 
 get_public_ip() {
-    # 使用缓存避免重复请求
     if [[ -n "$CACHED_PUBLIC_IP" ]]; then
         echo "$CACHED_PUBLIC_IP"
         return 0
@@ -254,7 +390,7 @@ show_access_info() {
     listen=$(get_yaml_val "listen" "$config_file")
 
     echo ""
-    echo -e "  ${BOLD}访问地址:${NC}"
+    echo -e "  ${BOLD}访问地址 (本小姐帮你查好了哦～♡):${NC}"
     echo -e "    本机访问   → ${CYAN}http://127.0.0.1:${port}${NC}"
 
     if [[ "$listen" == "true" ]]; then
@@ -268,7 +404,7 @@ show_access_info() {
         if [[ -n "$public_ip" ]]; then
             echo -e "    公网访问   → ${CYAN}http://${public_ip}:${port}${NC}"
         else
-            echo -e "    公网访问   → ${YELLOW}无法自动获取公网IP，请自行查看${NC}"
+            echo -e "    公网访问   → ${YELLOW}获取不到公网IP呢，杂鱼自己查一下吧～${NC}"
         fi
     fi
 }
@@ -305,7 +441,6 @@ check_installed() {
     return 1
 }
 
-# 保存脚本到安装目录，方便后续使用
 save_script() {
     [[ -z "$INSTALL_DIR" || ! -d "$INSTALL_DIR" ]] && return 1
 
@@ -319,7 +454,6 @@ save_script() {
         return 0
     fi
 
-    # 代理失败时尝试直连
     if [[ "$IS_CHINA" == true ]]; then
         if curl -fsSL --connect-timeout 10 "$SCRIPT_RAW_URL" -o "$target" 2>/dev/null; then
             chmod +x "$target"
@@ -333,15 +467,14 @@ save_script() {
 # ==================== 环境检测 ====================
 
 detect_os() {
-    step "检测运行环境"
+    step "本小姐来看看杂鱼用的什么环境～♡"
 
-    # Termux 检测
     if [[ -n "${TERMUX_VERSION:-}" ]] || [[ -d "/data/data/com.termux" ]]; then
         IS_TERMUX=true
         OS_TYPE="termux"
         PKG_MANAGER="pkg"
         NEED_SUDO=""
-        info "运行环境: Termux (Android)"
+        info "原来是手机上的 Termux 啊，杂鱼还挺会玩的嘛～♡"
         return
     fi
 
@@ -359,38 +492,38 @@ detect_os() {
     case "$OS_TYPE" in
         ubuntu|debian|linuxmint|pop)
             PKG_MANAGER="apt"
-            info "运行环境: Debian/Ubuntu ($OS_TYPE)"
+            info "Debian/Ubuntu ($OS_TYPE) 嘛，杂鱼品味还行～♡"
             ;;
         centos|rhel|rocky|almalinux|fedora)
             PKG_MANAGER="yum"
             command_exists dnf && PKG_MANAGER="dnf"
-            info "运行环境: RHEL/CentOS ($OS_TYPE)"
+            info "RHEL/CentOS ($OS_TYPE)，杂鱼用企业级系统呢～♡"
             ;;
         arch|manjaro)
             PKG_MANAGER="pacman"
-            info "运行环境: Arch ($OS_TYPE)"
+            info "Arch ($OS_TYPE)！杂鱼是 Arch 用户吗，有点东西哦～♡"
             ;;
         alpine)
             PKG_MANAGER="apk"
-            info "运行环境: Alpine"
+            info "Alpine 呢，杂鱼喜欢轻量级的嘛～♡"
             ;;
         macos)
             PKG_MANAGER="brew"
-            info "运行环境: macOS"
+            info "macOS 啊，有钱的杂鱼呢～♡"
             ;;
         *)
-            warn "未识别的系统: $OS_TYPE，将尝试继续"
+            warn "这什么系统啊...本小姐都不认识，杂鱼用的什么奇怪东西～"
             PKG_MANAGER="unknown"
             ;;
     esac
 }
 
 detect_network() {
-    step "检测网络环境"
+    step "检测一下杂鱼的网络环境～♡"
 
     local china_test=false
 
-    if curl -s --connect-timeout 3 --max-time 5 "https://www.baidu.com" &>/dev/null; then
+    if run_with_spinner "探测网络中..." curl -s --connect-timeout 3 --max-time 5 "https://www.baidu.com"; then
         if ! curl -s --connect-timeout 3 --max-time 5 "https://www.google.com" &>/dev/null; then
             china_test=true
         fi
@@ -404,25 +537,25 @@ detect_network() {
 
     if [[ "$china_test" == true ]]; then
         IS_CHINA=true
-        info "网络环境: 中国大陆 (将启用加速镜像)"
+        info "在国内呢～本小姐帮杂鱼开加速镜像吧♡"
         find_github_proxy
     else
         IS_CHINA=false
-        info "网络环境: 国际网络 (直连 GitHub)"
+        info "国际网络，杂鱼可以直连 GitHub 呢～♡"
     fi
 }
 
 find_github_proxy() {
-    info "测试 GitHub 代理可用性..."
+    run_with_spinner "帮杂鱼找个能用的代理..." sleep 0.5
     for proxy in "${GITHUB_PROXIES[@]}"; do
         local test_url="${proxy}https://github.com/SillyTavern/SillyTavern/raw/release/package.json"
         if curl -s --connect-timeout 5 --max-time 10 "$test_url" &>/dev/null; then
             GITHUB_PROXY="$proxy"
-            info "可用代理: ${proxy}"
+            info "找到啦～用这个代理: ${proxy} ♡"
             return 0
         fi
     done
-    warn "未找到可用代理，将尝试直连"
+    warn "代理都不行呢...只能直连试试了，杂鱼祈祷吧～♡"
     GITHUB_PROXY=""
 }
 
@@ -438,37 +571,44 @@ get_github_url() {
 # ==================== 依赖安装 ====================
 
 update_pkg_cache() {
-    info "更新软件包索引..."
-    case "$PKG_MANAGER" in
-        pkg)    pkg update -y 2>/dev/null ;;
-        apt)    $NEED_SUDO apt-get update -qq 2>/dev/null ;;
-        yum)    $NEED_SUDO yum makecache -q 2>/dev/null ;;
-        dnf)    $NEED_SUDO dnf makecache -q 2>/dev/null ;;
-        pacman) $NEED_SUDO pacman -Sy --noconfirm 2>/dev/null ;;
-        apk)    $NEED_SUDO apk update 2>/dev/null ;;
-        brew)   brew update 2>/dev/null ;;
-    esac
+    run_with_spinner "更新软件包索引..." \
+    bash -c "
+        case '$PKG_MANAGER' in
+            pkg)    pkg update -y ;;
+            apt)    $NEED_SUDO apt-get update -qq ;;
+            yum)    $NEED_SUDO yum makecache -q ;;
+            dnf)    $NEED_SUDO dnf makecache -q ;;
+            pacman) $NEED_SUDO pacman -Sy --noconfirm ;;
+            apk)    $NEED_SUDO apk update ;;
+            brew)   brew update ;;
+        esac
+    " 2>/dev/null
 }
 
 install_git() {
     if command_exists git; then
-        info "Git $(git --version | awk '{print $3}') ✓"
+        info "Git $(git --version | awk '{print $3}') 已经有了呢～♡"
         return 0
     fi
 
-    info "安装 Git..."
-    case "$PKG_MANAGER" in
-        pkg)    pkg install -y git ;;
-        apt)    $NEED_SUDO apt-get install -y -qq git ;;
-        yum)    $NEED_SUDO yum install -y -q git ;;
-        dnf)    $NEED_SUDO dnf install -y -q git ;;
-        pacman) $NEED_SUDO pacman -S --noconfirm git ;;
-        apk)    $NEED_SUDO apk add git ;;
-        brew)   brew install git ;;
-        *)      error "请手动安装 git"; return 1 ;;
-    esac
-
-    command_exists git && info "Git 安装完成" || { error "Git 安装失败"; return 1; }
+    if run_with_progress "安装 Git" \
+        bash -c "
+            case '$PKG_MANAGER' in
+                pkg)    pkg install -y git ;;
+                apt)    $NEED_SUDO apt-get install -y -qq git ;;
+                yum)    $NEED_SUDO yum install -y -q git ;;
+                dnf)    $NEED_SUDO dnf install -y -q git ;;
+                pacman) $NEED_SUDO pacman -S --noconfirm git ;;
+                apk)    $NEED_SUDO apk add git ;;
+                brew)   brew install git ;;
+                *)      exit 1 ;;
+            esac
+        "; then
+        command_exists git && info "Git 装好了哦，杂鱼～♡" || { error "Git 装不上...杂鱼的环境有问题吧～"; return 1; }
+    else
+        error "Git 安装失败了呢，杂鱼检查一下环境吧～"
+        return 1
+    fi
 }
 
 check_node_version() {
@@ -480,13 +620,13 @@ check_node_version() {
 
 install_nodejs() {
     if check_node_version; then
-        info "Node.js $(node -v) ✓"
+        info "Node.js $(node -v) 已经有了呢～♡"
         return 0
     fi
 
-    command_exists node && warn "Node.js $(node -v) 版本过低，需要 v${MIN_NODE_VERSION}+"
+    command_exists node && warn "Node.js $(node -v) 版本太低了，杂鱼用的什么老古董～需要 v${MIN_NODE_VERSION}+ 哦♡"
 
-    step "安装 Node.js"
+    step "帮杂鱼安装 Node.js～♡"
 
     if [[ "$IS_TERMUX" == true ]]; then
         install_nodejs_termux
@@ -499,43 +639,47 @@ install_nodejs() {
     hash -r 2>/dev/null || true
 
     if check_node_version; then
-        info "Node.js $(node -v) 安装完成"
+        info "Node.js $(node -v) 安装好了～杂鱼感谢本小姐吧♡"
     else
-        error "Node.js 安装失败"; return 1
+        error "Node.js 装不上呢...杂鱼查看日志: $LOG_FILE"
+        return 1
     fi
 
-    # 设置 npm 镜像
     if [[ "$IS_CHINA" == true ]]; then
         npm config set registry https://registry.npmmirror.com 2>/dev/null
-        info "npm 镜像: npmmirror"
+        info "npm 镜像设好了: npmmirror ♡"
     fi
 }
 
 install_nodejs_termux() {
-    pkg install -y nodejs 2>/dev/null || pkg install -y nodejs-lts 2>/dev/null
+    run_with_progress "安装 Node.js (Termux)" \
+        bash -c "pkg install -y nodejs 2>/dev/null || pkg install -y nodejs-lts 2>/dev/null"
 }
 
 install_nodejs_standard() {
-    case "$PKG_MANAGER" in
-        apt)
-            $NEED_SUDO apt-get install -y -qq ca-certificates curl gnupg
-            $NEED_SUDO mkdir -p /etc/apt/keyrings
-            curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-                | $NEED_SUDO gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
-            echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
-                | $NEED_SUDO tee /etc/apt/sources.list.d/nodesource.list >/dev/null
-            $NEED_SUDO apt-get update -qq
-            $NEED_SUDO apt-get install -y -qq nodejs
-            ;;
-        yum|dnf)
-            curl -fsSL https://rpm.nodesource.com/setup_20.x | $NEED_SUDO bash -
-            $NEED_SUDO $PKG_MANAGER install -y nodejs
-            ;;
-        pacman) $NEED_SUDO pacman -S --noconfirm nodejs npm ;;
-        apk)    $NEED_SUDO apk add nodejs npm ;;
-        brew)   brew install node@20 ;;
-        *)      install_nodejs_binary ;;
-    esac
+    run_with_progress "安装 Node.js" \
+        bash -c "
+            case '$PKG_MANAGER' in
+                apt)
+                    $NEED_SUDO apt-get install -y -qq ca-certificates curl gnupg
+                    $NEED_SUDO mkdir -p /etc/apt/keyrings
+                    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+                        | $NEED_SUDO gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
+                    echo 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main' \
+                        | $NEED_SUDO tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+                    $NEED_SUDO apt-get update -qq
+                    $NEED_SUDO apt-get install -y -qq nodejs
+                    ;;
+                yum|dnf)
+                    curl -fsSL https://rpm.nodesource.com/setup_20.x | $NEED_SUDO bash -
+                    $NEED_SUDO $PKG_MANAGER install -y nodejs
+                    ;;
+                pacman) $NEED_SUDO pacman -S --noconfirm nodejs npm ;;
+                apk)    $NEED_SUDO apk add nodejs npm ;;
+                brew)   brew install node@20 ;;
+                *)      exit 1 ;;
+            esac
+        "
 }
 
 install_nodejs_china() {
@@ -551,45 +695,51 @@ install_nodejs_binary() {
         x86_64|amd64)  arch="x64"    ;;
         aarch64|arm64) arch="arm64"  ;;
         armv7l)        arch="armv7l" ;;
-        *) error "不支持的 CPU 架构: $(uname -m)"; return 1 ;;
+        *) error "这 CPU 架构本小姐不认识: $(uname -m)，杂鱼用的什么奇怪机器～"; return 1 ;;
     esac
 
     local filename="node-${node_ver}-linux-${arch}.tar.xz"
     local tmp_dir
     tmp_dir=$(mktemp -d)
 
-    info "下载 Node.js ${node_ver}..."
-    if curl -fSL --progress-bar -o "${tmp_dir}/${filename}" "${mirror}/${node_ver}/${filename}"; then
-        cd "$tmp_dir"
-        tar xf "$filename"
-        $NEED_SUDO cp -rf "node-${node_ver}-linux-${arch}"/{bin,include,lib,share} /usr/local/ 2>/dev/null || \
-        $NEED_SUDO cp -rf "node-${node_ver}-linux-${arch}"/{bin,include,lib} /usr/local/
-        cd - >/dev/null
+    if run_with_progress "下载 Node.js ${node_ver}" \
+        curl -fSL -o "${tmp_dir}/${filename}" "${mirror}/${node_ver}/${filename}"; then
+
+        run_with_spinner "解压安装中..." bash -c "
+            cd '$tmp_dir'
+            tar xf '$filename'
+            $NEED_SUDO cp -rf 'node-${node_ver}-linux-${arch}'/{bin,include,lib,share} /usr/local/ 2>/dev/null || \
+            $NEED_SUDO cp -rf 'node-${node_ver}-linux-${arch}'/{bin,include,lib} /usr/local/
+        "
         rm -rf "$tmp_dir"
         hash -r 2>/dev/null || true
     else
         rm -rf "$tmp_dir"
-        error "Node.js 下载失败"; return 1
+        error "Node.js 下载失败了呢...杂鱼的网络不行吗～♡"
+        return 1
     fi
 }
 
 install_dependencies() {
-    step "安装系统依赖"
+    step "帮杂鱼安装系统依赖～♡"
 
     [[ "$IS_TERMUX" != true ]] && get_sudo
     update_pkg_cache
 
     if [[ "$IS_TERMUX" == true ]]; then
-        pkg install -y curl git 2>/dev/null
+        run_with_progress "安装基础工具" pkg install -y curl git
     else
-        case "$PKG_MANAGER" in
-            apt)    $NEED_SUDO apt-get install -y -qq curl wget tar xz-utils ;;
-            yum)    $NEED_SUDO yum install -y -q curl wget tar xz ;;
-            dnf)    $NEED_SUDO dnf install -y -q curl wget tar xz ;;
-            pacman) $NEED_SUDO pacman -S --noconfirm --needed curl wget tar xz ;;
-            apk)    $NEED_SUDO apk add curl wget tar xz ;;
-            brew)   : ;;
-        esac
+        run_with_progress "安装基础工具" \
+            bash -c "
+                case '$PKG_MANAGER' in
+                    apt)    $NEED_SUDO apt-get install -y -qq curl wget tar xz-utils ;;
+                    yum)    $NEED_SUDO yum install -y -q curl wget tar xz ;;
+                    dnf)    $NEED_SUDO dnf install -y -q curl wget tar xz ;;
+                    pacman) $NEED_SUDO pacman -S --noconfirm --needed curl wget tar xz ;;
+                    apk)    $NEED_SUDO apk add curl wget tar xz ;;
+                    brew)   : ;;
+                esac
+            "
     fi
 
     install_git
@@ -600,19 +750,17 @@ install_dependencies() {
 
 install_pm2() {
     if command_exists pm2; then
-        info "PM2 $(pm2 -v 2>/dev/null) ✓"
+        info "PM2 $(pm2 -v 2>/dev/null) 已经装好了呢～♡"
         return 0
     fi
-    info "安装 PM2..."
-    npm install -g pm2 2>/dev/null
-    if command_exists pm2; then
-        info "PM2 安装完成"
-        return 0
-    else
-        # 尝试用 npx
-        warn "全局安装失败，将使用 npx 方式"
-        return 1
+    if run_with_spinner "安装 PM2..." npm install -g pm2; then
+        if command_exists pm2; then
+            info "PM2 安装好了～♡"
+            return 0
+        fi
     fi
+    warn "PM2 全局安装失败了，用 npx 方式吧，杂鱼～♡"
+    return 1
 }
 
 is_pm2_managed() {
@@ -626,9 +774,7 @@ is_pm2_online() {
 }
 
 is_running() {
-    # 检查 PM2
     if is_pm2_online; then return 0; fi
-    # 检查直接进程
     if command_exists pgrep; then
         pgrep -f "node.*server\.js" &>/dev/null && return 0
     else
@@ -638,33 +784,33 @@ is_running() {
 }
 
 pm2_start() {
-    install_pm2 || { error "PM2 不可用"; return 1; }
+    install_pm2 || { error "PM2 用不了呢，杂鱼～♡"; return 1; }
 
     cd "$INSTALL_DIR"
     if is_pm2_managed; then
-        pm2 restart "$SERVICE_NAME" 2>/dev/null
+        run_silent "PM2 重启" pm2 restart "$SERVICE_NAME"
     else
-        pm2 start server.js --name "$SERVICE_NAME" 2>/dev/null
+        run_silent "PM2 启动" pm2 start server.js --name "$SERVICE_NAME"
     fi
     pm2 save 2>/dev/null
     cd - >/dev/null
 
     sleep 2
     if is_pm2_online; then
-        success "SillyTavern 已在后台启动"
+        success "SillyTavern 已经在后台跑起来了～杂鱼快去玩吧♡"
         show_access_info
         return 0
     else
-        error "启动失败，使用 'pm2 logs $SERVICE_NAME' 查看日志"
+        error "启动失败了呢...杂鱼用 'pm2 logs $SERVICE_NAME' 看看出了什么问题吧～♡"
         return 1
     fi
 }
 
 pm2_stop() {
     if is_pm2_online; then
-        pm2 stop "$SERVICE_NAME" 2>/dev/null
+        run_silent "停止服务" pm2 stop "$SERVICE_NAME"
         pm2 save 2>/dev/null
-        info "SillyTavern 已停止"
+        info "SillyTavern 停下来了～杂鱼不玩了吗♡"
     elif command_exists pgrep; then
         local pid
         pid=$(pgrep -f "node.*server\.js" 2>/dev/null | head -1 || true)
@@ -672,12 +818,12 @@ pm2_stop() {
             kill "$pid" 2>/dev/null || true
             sleep 1
             kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-            info "SillyTavern 进程已停止"
+            info "进程已经停掉了～♡"
         else
-            info "SillyTavern 未在运行"
+            info "本来就没在跑嘛，杂鱼在干什么呢～♡"
         fi
     else
-        info "SillyTavern 未在运行"
+        info "本来就没在跑嘛，杂鱼在干什么呢～♡"
     fi
 }
 
@@ -700,25 +846,24 @@ pm2 resurrect
 BOOTEOF
         chmod +x "$HOME/.termux/boot/sillytavern.sh"
         pm2 save 2>/dev/null
-        success "Termux 开机自启已配置"
-        warn "请确保已安装 Termux:Boot 应用"
+        success "Termux 开机自启设好了～杂鱼记得装 Termux:Boot 哦♡"
+        warn "需要安装 Termux:Boot 应用才能生效哦～"
     else
         echo ""
-        info "正在生成自启动配置..."
+        info "生成自启动配置中..."
         local startup_cmd
         startup_cmd=$(pm2 startup 2>&1 | grep -E "sudo|env" | head -1 || true)
         if [[ -n "$startup_cmd" ]]; then
-            info "请手动执行以下命令完成自启动设置:"
+            info "杂鱼，把下面这行命令复制去执行一下～♡"
             echo ""
             echo -e "    ${CYAN}${startup_cmd}${NC}"
             echo ""
-            info "执行后再运行: ${CYAN}pm2 save${NC}"
+            info "执行完再跑一下: ${CYAN}pm2 save${NC}"
         else
-            # 尝试直接执行
             get_sudo
-            pm2 startup 2>/dev/null || true
+            run_silent "设置自启动" pm2 startup
             pm2 save 2>/dev/null
-            info "自启动配置已尝试完成"
+            info "自启动应该配好了～♡"
         fi
     fi
 }
@@ -726,29 +871,30 @@ BOOTEOF
 pm2_remove_autostart() {
     if [[ "$IS_TERMUX" == true ]]; then
         rm -f "$HOME/.termux/boot/sillytavern.sh"
-        info "Termux 开机自启已移除"
+        info "Termux 开机自启移除了～♡"
     else
         pm2 unstartup 2>/dev/null || true
-        info "PM2 自启动已移除"
+        info "PM2 自启动移除了～♡"
     fi
 }
 
-# 旧版 systemd 迁移
 migrate_from_systemd() {
     [[ "$IS_TERMUX" == true ]] && return
     command_exists systemctl || return
 
     if $NEED_SUDO systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
         echo ""
-        warn "检测到旧版 systemd 服务"
-        info "新版本已改用 PM2 管理后台进程"
-        if confirm "是否移除旧版 systemd 服务?"; then
+        warn "发现旧版 systemd 服务呢～"
+        info "新版本用 PM2 管理了，更好用哦♡"
+        if confirm "移除旧版 systemd 服务？杂鱼～"; then
             get_sudo
-            $NEED_SUDO systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-            $NEED_SUDO systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-            $NEED_SUDO rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-            $NEED_SUDO systemctl daemon-reload 2>/dev/null || true
-            success "旧版 systemd 服务已移除"
+            run_silent "移除旧服务" bash -c "
+                $NEED_SUDO systemctl stop '$SERVICE_NAME' 2>/dev/null || true
+                $NEED_SUDO systemctl disable '$SERVICE_NAME' 2>/dev/null || true
+                $NEED_SUDO rm -f '/etc/systemd/system/${SERVICE_NAME}.service'
+                $NEED_SUDO systemctl daemon-reload 2>/dev/null || true
+            "
+            success "旧版服务清理干净了～♡"
         fi
     fi
 }
@@ -759,47 +905,46 @@ open_firewall_port() {
     local port="$1"
 
     if [[ "$IS_TERMUX" == true ]]; then
-        info "Termux 环境无需配置防火墙"
+        info "Termux 不需要管防火墙的啦，杂鱼～♡"
         return
     fi
 
     get_sudo || return
 
-    step "检查防火墙"
+    step "帮杂鱼检查防火墙～♡"
     local firewall_found=false
 
-    # UFW
     if command_exists ufw; then
         local ufw_status
         ufw_status=$($NEED_SUDO ufw status 2>/dev/null | head -1 || true)
         if echo "$ufw_status" | grep -qi "active"; then
             firewall_found=true
             if $NEED_SUDO ufw status | grep -qw "$port"; then
-                info "UFW: 端口 $port 已放行"
+                info "UFW: 端口 $port 已经放行了呢～♡"
             else
-                $NEED_SUDO ufw allow "$port/tcp" >/dev/null 2>&1
-                success "UFW: 已放行端口 $port/tcp"
+                run_silent "UFW放行" $NEED_SUDO ufw allow "$port/tcp"
+                success "UFW: 端口 $port/tcp 放行了～♡"
             fi
         fi
     fi
 
-    # firewalld
     if command_exists firewall-cmd; then
         local fwd_state
         fwd_state=$($NEED_SUDO firewall-cmd --state 2>/dev/null || true)
         if [[ "$fwd_state" == "running" ]]; then
             firewall_found=true
             if $NEED_SUDO firewall-cmd --list-ports 2>/dev/null | grep -qw "${port}/tcp"; then
-                info "firewalld: 端口 $port 已放行"
+                info "firewalld: 端口 $port 已经放行了～♡"
             else
-                $NEED_SUDO firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
-                $NEED_SUDO firewall-cmd --reload >/dev/null 2>&1
-                success "firewalld: 已放行端口 $port/tcp"
+                run_silent "firewalld放行" bash -c "
+                    $NEED_SUDO firewall-cmd --permanent --add-port='${port}/tcp'
+                    $NEED_SUDO firewall-cmd --reload
+                "
+                success "firewalld: 端口 $port/tcp 放行了～♡"
             fi
         fi
     fi
 
-    # iptables
     if [[ "$firewall_found" == false ]] && command_exists iptables; then
         local has_drop
         has_drop=$($NEED_SUDO iptables -L INPUT -n 2>/dev/null | grep -cE 'DROP|REJECT' || true)
@@ -814,17 +959,17 @@ open_firewall_port() {
                         $NEED_SUDO netfilter-persistent save 2>/dev/null || true
                     fi
                 fi
-                success "iptables: 已放行端口 $port/tcp"
+                success "iptables: 端口 $port/tcp 放行了～♡"
             else
-                info "iptables: 端口 $port 已放行"
+                info "iptables: 端口 $port 已经放行了呢～♡"
             fi
         fi
     fi
 
-    [[ "$firewall_found" == false ]] && info "未检测到活动防火墙"
+    [[ "$firewall_found" == false ]] && info "没检测到防火墙呢～♡"
 
     echo ""
-    warn "云服务器用户请确保安全组也放行了端口 ${port}/tcp"
+    warn "用云服务器的杂鱼记得去安全组也放行端口 ${port}/tcp 哦～♡"
 }
 
 remove_firewall_port() {
@@ -848,64 +993,72 @@ remove_firewall_port() {
 # ==================== SillyTavern 核心操作 ====================
 
 clone_sillytavern() {
-    step "克隆 SillyTavern"
+    step "帮杂鱼拉取 SillyTavern 代码～♡"
 
-    INSTALL_DIR=$(read_input "安装目录" "$DEFAULT_INSTALL_DIR")
+    INSTALL_DIR=$(read_input "安装到哪里呢，杂鱼" "$DEFAULT_INSTALL_DIR")
 
     if [[ -d "$INSTALL_DIR" ]]; then
         if [[ -f "$INSTALL_DIR/server.js" || -f "$INSTALL_DIR/start.sh" ]]; then
-            warn "目录已存在 SillyTavern 安装"
-            if confirm "删除现有安装并重新安装?"; then
+            warn "这里已经装过 SillyTavern 了呢～"
+            if confirm "删掉重装？杂鱼想好了吗"; then
                 rm -rf "$INSTALL_DIR"
             else
-                info "保留现有安装"
+                info "那就保留吧～♡"
                 return 0
             fi
         else
-            error "目录已存在且不是 SillyTavern: $INSTALL_DIR"
+            error "这个目录里有别的东西: $INSTALL_DIR，杂鱼换个位置吧～"
             return 1
         fi
     fi
 
     echo ""
-    ask "选择安装分支:"
-    echo -e "    ${GREEN}1)${NC} release  ${DIM}稳定版 (推荐)${NC}"
-    echo -e "    ${YELLOW}2)${NC} staging  ${DIM}开发版 (最新功能)${NC}"
+    ask "杂鱼想装哪个版本呢～♡"
+    echo -e "    ${GREEN}1)${NC} release  ${DIM}稳定版 (本小姐推荐这个♡)${NC}"
+    echo -e "    ${YELLOW}2)${NC} staging  ${DIM}开发版 (杂鱼想尝鲜的话～)${NC}"
     echo ""
 
     local branch_choice=""
     while [[ "$branch_choice" != "1" && "$branch_choice" != "2" ]]; do
-        branch_choice=$(read_input "选择" "1")
+        branch_choice=$(read_input "选哪个" "1")
     done
 
     local branch="release"
     [[ "$branch_choice" == "2" ]] && branch="staging"
-    info "分支: $branch"
+    info "好的，选 $branch 分支～♡"
 
     local repo_url
     repo_url=$(get_github_url "$SILLYTAVERN_REPO")
 
-    if ! git clone -b "$branch" --single-branch --depth 1 "$repo_url" "$INSTALL_DIR" 2>/dev/null; then
+    if run_with_progress "克隆仓库" \
+        git clone -b "$branch" --single-branch --depth 1 "$repo_url" "$INSTALL_DIR"; then
+        success "代码拉下来了～♡"
+    else
         if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
-            warn "代理失败，尝试直连..."
-            if ! git clone -b "$branch" --single-branch --depth 1 "$SILLYTAVERN_REPO" "$INSTALL_DIR" 2>/dev/null; then
-                error "克隆失败，请检查网络"; return 1
+            warn "代理不行呢，本小姐试试直连..."
+            if run_with_progress "直连克隆" \
+                git clone -b "$branch" --single-branch --depth 1 "$SILLYTAVERN_REPO" "$INSTALL_DIR"; then
+                success "直连成功了呢～♡"
+            else
+                error "克隆失败了...杂鱼检查一下网络吧～♡"
+                return 1
             fi
         else
-            error "克隆失败，请检查网络"; return 1
+            error "克隆失败了...杂鱼的网络有问题吧～♡"
+            return 1
         fi
     fi
-    success "仓库克隆完成"
 
-    # 规范化换行符
     find "$INSTALL_DIR" -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
 
-    step "安装 npm 依赖"
+    step "安装 npm 依赖～♡"
     cd "$INSTALL_DIR"
-    if npm install --no-audit --no-fund 2>&1 | tail -3; then
-        success "npm 依赖安装完成"
+    if run_with_progress "安装依赖包" npm install --no-audit --no-fund; then
+        success "依赖全装好了～杂鱼什么都不用管♡"
     else
-        error "npm 依赖安装失败"; cd - >/dev/null; return 1
+        error "npm 依赖安装失败了...杂鱼查看日志: $LOG_FILE"
+        cd - >/dev/null
+        return 1
     fi
     cd - >/dev/null
 
@@ -913,7 +1066,7 @@ clone_sillytavern() {
 }
 
 configure_sillytavern() {
-    step "配置 SillyTavern"
+    step "帮杂鱼配置 SillyTavern～♡"
 
     local config_file="$INSTALL_DIR/config.yaml"
     local default_file="$INSTALL_DIR/default.yaml"
@@ -922,83 +1075,84 @@ configure_sillytavern() {
         if [[ -f "$default_file" ]]; then
             cp "$default_file" "$config_file"
             sed -i 's/\r$//' "$config_file"
-            info "已生成配置文件"
+            info "配置文件生成了～♡"
         else
-            error "未找到 default.yaml"; return 1
+            error "default.yaml 都没有...杂鱼的文件怎么回事～"
+            return 1
         fi
     fi
 
     echo ""
     divider
-    echo -e "  ${BOLD}配置向导${NC}"
+    echo -e "  ${BOLD}${PINK}♡ 配置向导 ♡${NC}"
+    echo -e "  ${DIM}本小姐来一步步教杂鱼设置～${NC}"
     divider
 
     # --- 监听设置 ---
     echo ""
     echo -e "  ${BOLD}1. 监听模式${NC}"
-    echo -e "     ${DIM}开启后允许局域网/外网设备访问 (0.0.0.0)${NC}"
-    echo -e "     ${DIM}关闭则仅本机可用 (127.0.0.1)${NC}"
+    echo -e "     ${DIM}开启 → 别的设备也能访问 (局域网/外网)${NC}"
+    echo -e "     ${DIM}关闭 → 只有本机能用${NC}"
     echo ""
 
     local listen_enabled=false
-    if confirm "开启监听 (允许远程访问)?"; then
+    if confirm "开启监听吗，杂鱼～♡"; then
         set_yaml_val "listen" "true" "$config_file"
         listen_enabled=true
-        success "已开启监听"
+        success "监听开启了～别的设备也能访问哦♡"
     else
         set_yaml_val "listen" "false" "$config_file"
-        info "仅本机访问"
+        info "好吧，就杂鱼自己用～♡"
     fi
 
     # --- 端口 ---
     echo ""
     echo -e "  ${BOLD}2. 端口设置${NC}"
     local port
-    port=$(read_input "设置端口号" "8000")
+    port=$(read_input "要用哪个端口呢，杂鱼" "8000")
     if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
         set_yaml_val "port" "$port" "$config_file"
-        info "端口: $port"
+        info "端口设成 $port 了～♡"
     else
-        warn "无效端口，使用默认 8000"
+        warn "这端口号不对吧...杂鱼，用默认的 8000 了哦～♡"
         port="8000"
     fi
 
     # --- 白名单 ---
     echo ""
     echo -e "  ${BOLD}3. 白名单模式${NC}"
-    echo -e "     ${DIM}开启后仅白名单 IP 可访问${NC}"
-    echo -e "     ${DIM}需要远程访问时建议关闭${NC}"
+    echo -e "     ${DIM}开启 → 只有白名单里的 IP 才能访问${NC}"
+    echo -e "     ${DIM}远程访问的话建议关掉哦～${NC}"
     echo ""
-    if confirm "关闭白名单模式?"; then
+    if confirm "关掉白名单？杂鱼～"; then
         set_yaml_val "whitelistMode" "false" "$config_file"
-        success "白名单已关闭"
+        success "白名单关了～♡"
     else
         set_yaml_val "whitelistMode" "true" "$config_file"
-        info "白名单保持开启"
+        info "保持白名单开着也行～♡"
     fi
 
     # --- 基础认证 ---
     echo ""
     echo -e "  ${BOLD}4. 基础认证 (HTTP Auth)${NC}"
-    echo -e "     ${DIM}访问时需输入用户名和密码${NC}"
+    echo -e "     ${DIM}访问的时候要输用户名密码～${NC}"
     if [[ "$listen_enabled" == true ]]; then
-        echo -e "     ${RED}已开启远程访问，强烈建议启用认证${NC}"
+        echo -e "     ${RED}杂鱼开了远程访问，不设密码很危险的哦！${NC}"
     fi
     echo ""
-    if confirm "开启基础认证?"; then
+    if confirm "开启认证吗，杂鱼～♡"; then
         set_yaml_val "basicAuthMode" "true" "$config_file"
 
         echo ""
         local auth_user=""
         while [[ -z "$auth_user" ]]; do
-            auth_user=$(read_input "设置认证用户名")
-            [[ -z "$auth_user" ]] && warn "用户名不能为空"
+            auth_user=$(read_input "设个用户名吧，杂鱼")
+            [[ -z "$auth_user" ]] && warn "空的？杂鱼认真点啦～♡"
         done
 
         local auth_pass
-        auth_pass=$(read_password "设置认证密码")
+        auth_pass=$(read_password "再设个密码")
 
-        # 处理 basicAuthUser 嵌套结构
         if grep -q "basicAuthUser:" "$config_file" 2>/dev/null; then
             sed -i "/basicAuthUser:/,/^[^ #]/{
                 s|\(\s*\)username:.*|\1username: \"${auth_user}\"|
@@ -1012,10 +1166,10 @@ basicAuthUser:
 EOF
         fi
 
-        success "认证已开启 (用户: $auth_user)"
+        success "认证开好了～用户名: $auth_user ♡"
     else
         set_yaml_val "basicAuthMode" "false" "$config_file"
-        info "认证保持关闭"
+        info "不设密码的话小心被别人进来哦，杂鱼～♡"
     fi
 
     # --- 防火墙 ---
@@ -1025,31 +1179,30 @@ EOF
     fi
 
     echo ""
-    success "配置已保存"
+    success "配置全部搞定了～本小姐真厉害吧♡"
 }
 
 setup_background() {
     echo ""
     divider
-    echo -e "  ${BOLD}后台运行设置${NC}"
+    echo -e "  ${BOLD}${PINK}♡ 后台运行设置 ♡${NC}"
     divider
 
-    # 检查旧版 systemd
     [[ "$IS_TERMUX" != true ]] && get_sudo 2>/dev/null
     migrate_from_systemd
 
     echo ""
     echo -e "  ${BOLD}● PM2 后台运行${NC}"
-    echo -e "    ${DIM}使用 PM2 管理 SillyTavern 进程${NC}"
-    echo -e "    ${DIM}关闭终端后继续运行，支持自动重启${NC}"
+    echo -e "    ${DIM}关掉终端也能继续跑，还能自动重启呢～${NC}"
+    echo -e "    ${DIM}杂鱼应该需要这个吧♡${NC}"
     echo ""
 
-    if confirm "启用 PM2 后台运行?"; then
+    if confirm "启用 PM2 后台运行？杂鱼～"; then
         install_pm2 || return 1
-        success "PM2 已就绪"
+        success "PM2 准备好了～♡"
 
         echo ""
-        if confirm "同时设置开机自启动?"; then
+        if confirm "要不要顺便设开机自启？杂鱼～♡"; then
             pm2_setup_autostart
         fi
     fi
@@ -1059,33 +1212,33 @@ setup_background() {
 
 start_sillytavern() {
     if ! check_installed; then
-        error "SillyTavern 未安装"
+        error "SillyTavern 都没装呢，杂鱼先去安装啊～♡"
         return 1
     fi
 
     if is_running; then
-        warn "SillyTavern 已在运行中"
+        warn "已经在跑了啦！杂鱼记性不好吗～♡"
         show_access_info
         return 0
     fi
 
     echo ""
-    echo -e "  ${GREEN}1)${NC} 后台运行 ${DIM}(PM2，推荐)${NC}"
+    echo -e "  ${GREEN}1)${NC} 后台运行 ${DIM}(PM2，本小姐推荐♡)${NC}"
     echo -e "  ${GREEN}2)${NC} 前台运行 ${DIM}(Ctrl+C 停止)${NC}"
     echo ""
     local mode
-    mode=$(read_input "选择启动方式" "1")
+    mode=$(read_input "选一个吧，杂鱼" "1")
 
     case "$mode" in
         1)
-            step "以 PM2 后台模式启动"
+            step "用 PM2 后台启动～♡"
             pm2_start
             ;;
         2)
             local port
             port=$(get_port)
-            step "前台启动 SillyTavern"
-            info "按 Ctrl+C 停止"
+            step "前台启动 SillyTavern～♡"
+            info "按 Ctrl+C 就能停下来哦，杂鱼～♡"
             show_access_info
             echo ""
             cd "$INSTALL_DIR"
@@ -1093,26 +1246,26 @@ start_sillytavern() {
             cd - >/dev/null
             ;;
         *)
-            warn "无效选择"
+            warn "选个 1 或 2 都不会吗，杂鱼～♡"
             ;;
     esac
 }
 
 stop_sillytavern() {
     if ! is_running; then
-        info "SillyTavern 未在运行"
+        info "本来就没在跑嘛～杂鱼在瞎操作什么♡"
         return 0
     fi
-    step "停止 SillyTavern"
+    step "停止 SillyTavern～♡"
     pm2_stop
 }
 
 restart_sillytavern() {
     if ! check_installed; then
-        error "SillyTavern 未安装"
+        error "SillyTavern 都没装，杂鱼重启个寂寞～♡"
         return 1
     fi
-    step "重启 SillyTavern"
+    step "重启 SillyTavern～♡"
     pm2_stop
     sleep 1
     pm2_start
@@ -1122,7 +1275,7 @@ restart_sillytavern() {
 
 show_status() {
     if ! check_installed; then
-        error "SillyTavern 未安装"
+        error "SillyTavern 还没装呢，杂鱼～♡"
         return 1
     fi
 
@@ -1136,7 +1289,6 @@ show_status() {
     [[ -d "$INSTALL_DIR/.git" ]] && \
         branch=$(cd "$INSTALL_DIR" && git branch --show-current 2>/dev/null)
 
-    # 运行状态
     local status_text status_color
     if is_running; then
         status_text="运行中"
@@ -1146,14 +1298,13 @@ show_status() {
         status_color="$RED"
     fi
 
-    echo -e "  ${BOLD}基本信息${NC}"
+    echo -e "  ${BOLD}杂鱼的 SillyTavern 状态～♡${NC}"
     divider
     echo -e "    版本       ${CYAN}${version:-未知}${NC}"
     echo -e "    分支       ${CYAN}${branch:-未知}${NC}"
     echo -e "    目录       ${DIM}${INSTALL_DIR}${NC}"
     echo -e "    状态       ${status_color}● ${status_text}${NC}"
 
-    # PM2 状态
     if is_pm2_managed; then
         echo -e "    进程管理   ${GREEN}PM2${NC}"
     else
@@ -1162,7 +1313,6 @@ show_status() {
 
     echo ""
 
-    # 配置信息
     if [[ -f "$config_file" ]]; then
         local listen_val whitelist_val auth_val port_val user_acc discreet
         listen_val=$(get_yaml_val "listen" "$config_file")
@@ -1172,7 +1322,7 @@ show_status() {
         user_acc=$(get_yaml_val "enableUserAccounts" "$config_file")
         discreet=$(get_yaml_val "enableDiscreetLogin" "$config_file")
 
-        echo -e "  ${BOLD}当前配置${NC}"
+        echo -e "  ${BOLD}当前配置～♡${NC}"
         divider
         echo -e "    监听模式       $(format_bool "$listen_val")"
         echo -e "    端口           ${CYAN}${port_val}${NC}"
@@ -1192,20 +1342,17 @@ check_for_updates() {
 
     cd "$INSTALL_DIR" || return 1
 
-    # 设置代理
     if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
         git remote set-url origin "$(get_github_url "$SILLYTAVERN_REPO")" 2>/dev/null
     fi
 
-    if ! git fetch origin --quiet 2>/dev/null; then
-        # 还原并返回失败
+    if ! run_with_spinner "连接远程仓库..." git fetch origin --quiet; then
         [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]] && \
             git remote set-url origin "$SILLYTAVERN_REPO" 2>/dev/null
         cd - >/dev/null
         return 1
     fi
 
-    # 还原 remote URL
     [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]] && \
         git remote set-url origin "$SILLYTAVERN_REPO" 2>/dev/null
 
@@ -1225,72 +1372,71 @@ check_for_updates() {
 
 do_update() {
     if is_running; then
-        warn "SillyTavern 正在运行，将先停止"
+        warn "还在跑呢，本小姐先帮杂鱼停掉～♡"
         pm2_stop
     fi
 
     cd "$INSTALL_DIR"
 
-    # 备份配置
-    info "备份配置..."
+    run_with_spinner "备份配置中..." bash -c "
+        backup_dir=\"\$HOME/.ksilly_backup_\$(date +%Y%m%d_%H%M%S)\"
+        mkdir -p \"\$backup_dir\"
+        [[ -f 'config.yaml' ]] && cp 'config.yaml' \"\$backup_dir/\"
+        echo \"\$backup_dir\"
+    "
     local backup_dir="$HOME/.ksilly_backup_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     [[ -f "config.yaml" ]] && cp "config.yaml" "$backup_dir/"
-    info "备份: $backup_dir"
+    info "备份在: $backup_dir ♡"
 
-    # 设置代理
     if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
         git remote set-url origin "$(get_github_url "$SILLYTAVERN_REPO")" 2>/dev/null
     fi
 
-    info "拉取最新代码..."
-    if ! git pull --ff-only 2>/dev/null; then
-        warn "快速合并失败，尝试强制更新..."
+    if ! run_with_progress "拉取最新代码" git pull --ff-only; then
+        warn "快速合并失败了，本小姐帮杂鱼强制更新～♡"
         local current_branch
         current_branch=$(git branch --show-current)
-        git fetch --all 2>/dev/null
-        git reset --hard "origin/$current_branch" 2>/dev/null
+        run_with_progress "强制更新" bash -c "
+            git fetch --all 2>/dev/null
+            git reset --hard 'origin/$current_branch' 2>/dev/null
+        "
     fi
-    success "代码更新完成"
+    success "代码更新好了～♡"
 
-    # 还原 URL
     [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]] && \
         git remote set-url origin "$SILLYTAVERN_REPO" 2>/dev/null
 
-    # 规范化
     find . -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
 
-    info "更新 npm 依赖..."
-    npm install --no-audit --no-fund 2>&1 | tail -3
+    run_with_progress "更新依赖包" npm install --no-audit --no-fund
 
-    # 恢复配置
     if [[ -f "$backup_dir/config.yaml" ]]; then
         cp "$backup_dir/config.yaml" "config.yaml"
-        info "配置已恢复"
+        info "配置恢复了～♡"
     fi
 
     cd - >/dev/null
 
-    # 更新脚本副本
-    save_script 2>/dev/null && info "管理脚本已更新"
+    save_script 2>/dev/null && info "管理脚本也更新了～♡"
 
-    success "SillyTavern 更新完成!"
+    success "SillyTavern 更新完成！杂鱼满意吗～♡"
 
     echo ""
-    if confirm "立即启动 SillyTavern?"; then
+    if confirm "现在就启动吗，杂鱼～♡"; then
         pm2_start
     fi
 }
 
 handle_update() {
     if ! check_installed; then
-        error "SillyTavern 未安装"
+        error "SillyTavern 都没装，更新什么呢杂鱼～♡"
         return
     fi
 
     detect_network
 
-    step "检查更新"
+    step "帮杂鱼检查有没有更新～♡"
 
     local current_ver=""
     [[ -f "$INSTALL_DIR/package.json" ]] && \
@@ -1305,20 +1451,19 @@ handle_update() {
     echo -e "    当前分支: ${CYAN}${branch:-未知}${NC}"
 
     echo ""
-    info "连接远程仓库..."
 
     if check_for_updates; then
         echo ""
-        warn "发现 ${UPDATE_BEHIND} 个新提交可更新"
+        warn "有 ${UPDATE_BEHIND} 个新提交可以更新呢～♡"
         echo ""
-        if confirm "是否更新 SillyTavern?"; then
+        if confirm "更新吗，杂鱼～♡"; then
             do_update
         else
-            info "已取消更新"
+            info "不更新啊...杂鱼真是的～♡"
         fi
     else
         echo ""
-        success "当前已是最新版本，无需更新"
+        success "已经是最新版了～杂鱼不用担心♡"
     fi
 }
 
@@ -1326,72 +1471,72 @@ handle_update() {
 
 uninstall_sillytavern() {
     if ! check_installed; then
-        error "SillyTavern 未安装"
+        error "SillyTavern 都没装，卸什么载啊杂鱼～♡"
         return 1
     fi
 
     echo ""
-    warn "即将卸载 SillyTavern"
+    warn "杂鱼要把 SillyTavern 卸了吗...♡"
     echo -e "    安装目录: ${DIM}${INSTALL_DIR}${NC}"
     echo ""
-    confirm "确定要卸载吗? 此操作不可恢复!" || { info "已取消"; return 0; }
+    confirm "真的要卸载？不可恢复哦，杂鱼想好了吗～♡" || { info "算了就对了～♡"; return 0; }
     echo ""
-    confirm "再次确认: 删除所有数据?" || { info "已取消"; return 0; }
+    confirm "再确认一次...真的要删掉所有数据？杂鱼～♡" || { info "就说嘛～♡"; return 0; }
 
-    # 停止进程
     pm2_stop
     pm2_remove
 
-    # 防火墙清理
     local port
     port=$(get_port)
     remove_firewall_port "$port"
 
-    # 移除旧版 systemd (如果存在)
     if [[ "$IS_TERMUX" != true ]] && command_exists systemctl; then
         if $NEED_SUDO systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
             get_sudo
-            $NEED_SUDO systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-            $NEED_SUDO systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-            $NEED_SUDO rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-            $NEED_SUDO systemctl daemon-reload 2>/dev/null || true
+            run_silent "清理systemd" bash -c "
+                $NEED_SUDO systemctl stop '$SERVICE_NAME' 2>/dev/null || true
+                $NEED_SUDO systemctl disable '$SERVICE_NAME' 2>/dev/null || true
+                $NEED_SUDO rm -f '/etc/systemd/system/${SERVICE_NAME}.service'
+                $NEED_SUDO systemctl daemon-reload 2>/dev/null || true
+            "
         fi
     fi
 
-    # 移除 Termux 自启动
     rm -f "$HOME/.termux/boot/sillytavern.sh" 2>/dev/null
 
-    # 备份数据
     if [[ -d "$INSTALL_DIR/data" ]]; then
         echo ""
-        if confirm "备份聊天数据和角色卡?"; then
+        if confirm "要备份聊天数据和角色卡吗？杂鱼总不会连数据都不要吧～♡"; then
             local backup_path="$HOME/SillyTavern_backup_$(date +%Y%m%d_%H%M%S)"
             mkdir -p "$backup_path"
-            cp -r "$INSTALL_DIR/data" "$backup_path/"
-            [[ -f "$INSTALL_DIR/config.yaml" ]] && cp "$INSTALL_DIR/config.yaml" "$backup_path/"
-            success "数据备份: $backup_path"
+            run_with_spinner "备份数据中..." bash -c "
+                cp -r '$INSTALL_DIR/data' '$backup_path/'
+                [[ -f '$INSTALL_DIR/config.yaml' ]] && cp '$INSTALL_DIR/config.yaml' '$backup_path/'
+            "
+            success "数据备份到了: $backup_path ♡"
         fi
     fi
 
-    # 删除目录
-    rm -rf "$INSTALL_DIR"
+    run_with_spinner "删除安装目录..." rm -rf "$INSTALL_DIR"
     rm -f "$KSILLY_CONF"
-    success "SillyTavern 已卸载"
+    success "SillyTavern 卸载完了...杂鱼再见♡"
 
     echo ""
-    if confirm "同时卸载 Node.js?"; then
+    if confirm "顺便把 Node.js 也卸了？杂鱼～♡"; then
         if [[ "$IS_TERMUX" == true ]]; then
-            pkg uninstall -y nodejs 2>/dev/null || true
+            run_with_spinner "卸载 Node.js..." pkg uninstall -y nodejs
         else
             get_sudo
-            case "$PKG_MANAGER" in
-                apt)    $NEED_SUDO apt-get remove -y nodejs 2>/dev/null; $NEED_SUDO rm -f /etc/apt/sources.list.d/nodesource.list ;;
-                yum)    $NEED_SUDO yum remove -y nodejs 2>/dev/null ;;
-                dnf)    $NEED_SUDO dnf remove -y nodejs 2>/dev/null ;;
-                pacman) $NEED_SUDO pacman -R --noconfirm nodejs npm 2>/dev/null ;;
-            esac
+            run_with_spinner "卸载 Node.js..." bash -c "
+                case '$PKG_MANAGER' in
+                    apt)    $NEED_SUDO apt-get remove -y nodejs 2>/dev/null; $NEED_SUDO rm -f /etc/apt/sources.list.d/nodesource.list ;;
+                    yum)    $NEED_SUDO yum remove -y nodejs 2>/dev/null ;;
+                    dnf)    $NEED_SUDO dnf remove -y nodejs 2>/dev/null ;;
+                    pacman) $NEED_SUDO pacman -R --noconfirm nodejs npm 2>/dev/null ;;
+                esac
+            "
         fi
-        info "Node.js 已卸载"
+        info "Node.js 也卸掉了～♡"
     fi
 }
 
@@ -1399,13 +1544,13 @@ uninstall_sillytavern() {
 
 modify_config_menu() {
     if ! check_installed; then
-        error "SillyTavern 未安装"
+        error "SillyTavern 都没装，配什么置啊杂鱼～♡"
         return 1
     fi
 
     local config_file="$INSTALL_DIR/config.yaml"
     if [[ ! -f "$config_file" ]]; then
-        error "配置文件不存在"
+        error "配置文件不见了...杂鱼弄丢了吗～♡"
         return 1
     fi
 
@@ -1420,7 +1565,7 @@ modify_config_menu() {
         user_acc=$(get_yaml_val "enableUserAccounts" "$config_file")
         discreet=$(get_yaml_val "enableDiscreetLogin" "$config_file")
 
-        echo -e "  ${BOLD}当前配置${NC}"
+        echo -e "  ${BOLD}杂鱼的当前配置～♡${NC}"
         divider
         echo -e "    监听模式       $(format_bool "$listen_val")"
         echo -e "    端口           ${CYAN}${port_val}${NC}"
@@ -1431,13 +1576,15 @@ modify_config_menu() {
         echo ""
         divider
         echo ""
+        echo -e "  ${PINK}杂鱼想改哪个呢～♡${NC}"
+        echo ""
         echo -e "  ${GREEN}1)${NC} 修改监听设置"
         echo -e "  ${GREEN}2)${NC} 修改端口"
         echo -e "  ${GREEN}3)${NC} 修改白名单模式"
         echo -e "  ${GREEN}4)${NC} 修改基础认证"
-        echo -e "  ${GREEN}5)${NC} 修改用户账户系统  ${DIM}(enableUserAccounts)${NC}"
-        echo -e "  ${GREEN}6)${NC} 修改隐蔽登录      ${DIM}(enableDiscreetLogin)${NC}"
-        echo -e "  ${GREEN}7)${NC} 编辑完整配置文件"
+        echo -e "  ${GREEN}5)${NC} 修改用户账户系统"
+        echo -e "  ${GREEN}6)${NC} 修改隐蔽登录"
+        echo -e "  ${GREEN}7)${NC} 编辑完整配置文件 ${DIM}(给高级杂鱼用的)${NC}"
         echo -e "  ${GREEN}8)${NC} 重置为默认配置"
         echo -e "  ${GREEN}9)${NC} 防火墙放行管理"
         echo ""
@@ -1446,60 +1593,60 @@ modify_config_menu() {
         divider
 
         local choice
-        choice=$(read_input "选择操作")
+        choice=$(read_input "选一个吧")
 
         case "$choice" in
             1)
                 echo ""
-                echo -e "  当前状态: 监听 $(format_bool "$listen_val")"
-                if confirm "是否开启监听?"; then
+                echo -e "  当前: 监听 $(format_bool "$listen_val")"
+                if confirm "开启监听吗，杂鱼～♡"; then
                     set_yaml_val "listen" "true" "$config_file"
-                    success "已开启监听"
+                    success "监听开了～♡"
                     open_firewall_port "$(get_port)"
                 else
                     set_yaml_val "listen" "false" "$config_file"
-                    info "已关闭监听"
+                    info "关掉了～♡"
                 fi
                 ;;
             2)
                 echo ""
                 echo -e "  当前端口: ${CYAN}${port_val}${NC}"
                 local new_port
-                new_port=$(read_input "新端口号" "$port_val")
+                new_port=$(read_input "新端口号，杂鱼" "$port_val")
                 if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
                     set_yaml_val "port" "$new_port" "$config_file"
-                    success "端口已修改为: $new_port"
+                    success "端口改成 $new_port 了～♡"
                     local cur_listen
                     cur_listen=$(get_yaml_val "listen" "$config_file")
                     [[ "$cur_listen" == "true" ]] && open_firewall_port "$new_port"
                 else
-                    error "无效端口: $new_port"
+                    error "这端口号不对吧...杂鱼连数字都输不好吗～♡"
                 fi
                 ;;
             3)
                 echo ""
-                echo -e "  当前状态: 白名单 $(format_bool "$whitelist_val")"
-                if confirm "关闭白名单模式?"; then
+                echo -e "  当前: 白名单 $(format_bool "$whitelist_val")"
+                if confirm "关掉白名单？杂鱼～♡"; then
                     set_yaml_val "whitelistMode" "false" "$config_file"
-                    success "白名单已关闭"
+                    success "白名单关了～♡"
                 else
                     set_yaml_val "whitelistMode" "true" "$config_file"
-                    info "白名单已开启"
+                    info "保持开着吧～♡"
                 fi
                 ;;
             4)
                 echo ""
-                echo -e "  当前状态: 基础认证 $(format_bool "$auth_val")"
-                if confirm "开启基础认证?"; then
+                echo -e "  当前: 基础认证 $(format_bool "$auth_val")"
+                if confirm "开启认证？杂鱼～♡"; then
                     set_yaml_val "basicAuthMode" "true" "$config_file"
                     echo ""
                     local auth_user=""
                     while [[ -z "$auth_user" ]]; do
-                        auth_user=$(read_input "认证用户名")
-                        [[ -z "$auth_user" ]] && warn "不能为空"
+                        auth_user=$(read_input "用户名，杂鱼")
+                        [[ -z "$auth_user" ]] && warn "空的啊...杂鱼认真点～♡"
                     done
                     local auth_pass
-                    auth_pass=$(read_password "认证密码")
+                    auth_pass=$(read_password "密码")
                     if grep -q "basicAuthUser:" "$config_file" 2>/dev/null; then
                         sed -i "/basicAuthUser:/,/^[^ #]/{
                             s|\(\s*\)username:.*|\1username: \"${auth_user}\"|
@@ -1512,36 +1659,36 @@ basicAuthUser:
   password: "${auth_pass}"
 EOF
                     fi
-                    success "认证已开启 (用户: $auth_user)"
+                    success "认证设好了～用户: $auth_user ♡"
                 else
                     set_yaml_val "basicAuthMode" "false" "$config_file"
-                    info "认证已关闭"
+                    info "关了，杂鱼小心被人白嫖哦～♡"
                 fi
                 ;;
             5)
                 echo ""
-                echo -e "  当前状态: 用户账户系统 $(format_bool "${user_acc:-false}")"
-                echo -e "  ${DIM}开启后可创建多个独立用户，各自拥有独立数据${NC}"
+                echo -e "  当前: 用户账户系统 $(format_bool "${user_acc:-false}")"
+                echo -e "  ${DIM}开了的话可以创建多个用户，各自有独立数据哦～♡${NC}"
                 echo ""
-                if confirm "开启用户账户系统?"; then
+                if confirm "开启用户账户系统？杂鱼～♡"; then
                     set_yaml_val "enableUserAccounts" "true" "$config_file"
-                    success "用户账户系统已开启"
+                    success "用户系统开了～♡"
                 else
                     set_yaml_val "enableUserAccounts" "false" "$config_file"
-                    info "用户账户系统已关闭"
+                    info "关了～♡"
                 fi
                 ;;
             6)
                 echo ""
-                echo -e "  当前状态: 隐蔽登录 $(format_bool "${discreet:-false}")"
-                echo -e "  ${DIM}开启后登录页面不显示用户头像和用户名${NC}"
+                echo -e "  当前: 隐蔽登录 $(format_bool "${discreet:-false}")"
+                echo -e "  ${DIM}开了的话登录页不显示头像和用户名，更隐蔽哦～♡${NC}"
                 echo ""
-                if confirm "开启隐蔽登录?"; then
+                if confirm "开启隐蔽登录？杂鱼～♡"; then
                     set_yaml_val "enableDiscreetLogin" "true" "$config_file"
-                    success "隐蔽登录已开启"
+                    success "隐蔽登录开了～♡"
                 else
                     set_yaml_val "enableDiscreetLogin" "false" "$config_file"
-                    info "隐蔽登录已关闭"
+                    info "关了～♡"
                 fi
                 ;;
             7)
@@ -1550,13 +1697,13 @@ EOF
                 $editor "$config_file"
                 ;;
             8)
-                if confirm "重置配置为默认值?"; then
+                if confirm "要重置配置？杂鱼之前的设置都会没了哦～♡"; then
                     if [[ -f "$INSTALL_DIR/default.yaml" ]]; then
                         cp "$INSTALL_DIR/default.yaml" "$config_file"
                         sed -i 's/\r$//' "$config_file"
-                        success "已重置为默认配置"
+                        success "重置好了～♡"
                     else
-                        error "未找到 default.yaml"
+                        error "default.yaml 不见了...杂鱼～"
                     fi
                 fi
                 ;;
@@ -1567,15 +1714,14 @@ EOF
                 return 0
                 ;;
             *)
-                warn "无效选项"
+                warn "没这个选项啦，杂鱼看清楚再选～♡"
                 ;;
         esac
 
-        # 提示重启
         if [[ "$choice" =~ ^[1-6]$ ]] && is_running; then
             echo ""
-            warn "配置修改后需重启生效"
-            if confirm "立即重启 SillyTavern?"; then
+            warn "改了配置要重启才生效哦，杂鱼～♡"
+            if confirm "现在重启？"; then
                 restart_sillytavern
             fi
         fi
@@ -1588,15 +1734,14 @@ EOF
 
 pm2_menu() {
     if ! check_installed; then
-        error "SillyTavern 未安装"
+        error "SillyTavern 都没装呢，杂鱼～♡"
         return 1
     fi
 
     while true; do
         print_banner
 
-        # 显示当前状态
-        echo -e "  ${BOLD}PM2 后台运行状态${NC}"
+        echo -e "  ${BOLD}${PINK}♡ PM2 后台管理 ♡${NC}"
         divider
 
         if command_exists pm2; then
@@ -1615,7 +1760,6 @@ pm2_menu() {
             echo -e "    进程状态   ${DIM}未托管${NC}"
         fi
 
-        # 检查自启动
         if [[ "$IS_TERMUX" == true ]]; then
             if [[ -f "$HOME/.termux/boot/sillytavern.sh" ]]; then
                 echo -e "    开机自启   ${GREEN}● 已配置${NC}"
@@ -1626,6 +1770,8 @@ pm2_menu() {
 
         echo ""
         divider
+        echo ""
+        echo -e "  ${PINK}杂鱼想做什么呢～♡${NC}"
         echo ""
         echo -e "  ${GREEN}1)${NC} 安装/更新 PM2"
         echo -e "  ${GREEN}2)${NC} 启动 (PM2 后台)"
@@ -1641,7 +1787,7 @@ pm2_menu() {
         divider
 
         local choice
-        choice=$(read_input "选择操作")
+        choice=$(read_input "选一个吧，杂鱼")
 
         case "$choice" in
             1) install_pm2 ;;
@@ -1651,32 +1797,32 @@ pm2_menu() {
             5)
                 if is_pm2_managed; then
                     echo ""
-                    echo -e "  ${GREEN}1)${NC} 查看最近日志"
-                    echo -e "  ${GREEN}2)${NC} 实时跟踪日志 ${DIM}(Ctrl+C 退出)${NC}"
+                    echo -e "  ${GREEN}1)${NC} 看最近的日志"
+                    echo -e "  ${GREEN}2)${NC} 实时跟踪 ${DIM}(Ctrl+C 退出)${NC}"
                     echo -e "  ${GREEN}3)${NC} 清空日志"
                     echo ""
                     local log_choice
-                    log_choice=$(read_input "选择" "1")
+                    log_choice=$(read_input "选一个，杂鱼" "1")
                     case "$log_choice" in
                         1) echo ""; pm2 logs "$SERVICE_NAME" --lines 50 --nostream 2>/dev/null ;;
                         2) pm2 logs "$SERVICE_NAME" 2>/dev/null ;;
-                        3) pm2 flush "$SERVICE_NAME" 2>/dev/null; success "日志已清空" ;;
+                        3) pm2 flush "$SERVICE_NAME" 2>/dev/null; success "日志清空了～♡" ;;
                     esac
                 else
-                    warn "SillyTavern 未在 PM2 中注册"
+                    warn "还没注册到 PM2 呢，杂鱼先启动一次吧～♡"
                 fi
                 ;;
             6) pm2_setup_autostart ;;
             7) pm2_remove_autostart ;;
             8)
-                if confirm "从 PM2 中移除 SillyTavern 进程?"; then
+                if confirm "从 PM2 里移除？杂鱼确定吗～♡"; then
                     pm2_stop
                     pm2_remove
-                    success "已从 PM2 移除"
+                    success "移除了～♡"
                 fi
                 ;;
             0) return 0 ;;
-            *) warn "无效选项" ;;
+            *) warn "没这个选项啦，杂鱼～♡" ;;
         esac
 
         pause_key
@@ -1687,34 +1833,50 @@ pm2_menu() {
 
 full_install() {
     print_banner
+    init_log
 
-    echo -e "  ${BOLD}${GREEN}开始安装 SillyTavern${NC}"
+    echo -e "  ${BOLD}${PINK}♡ 本小姐来帮杂鱼安装 SillyTavern 吧～♡${NC}"
+    echo -e "  ${DIM}  没有本小姐，杂鱼肯定装不上的吧～${NC}"
     divider
 
+    # 总体进度
+    set_total_steps 6
+
     detect_os
+    advance_progress "环境检测"
+
     detect_network
+    advance_progress "网络检测"
+
     install_dependencies
+    advance_progress "依赖安装"
 
     echo ""
     clone_sillytavern
+    advance_progress "代码克隆"
+
     configure_sillytavern
+    advance_progress "配置向导"
+
     setup_background
+    advance_progress "后台设置"
 
     save_config
 
-    # 保存脚本到安装目录
-    step "保存管理脚本"
+    step "保存管理脚本～♡"
     if save_script; then
-        success "脚本已保存到: ${INSTALL_DIR}/ksilly.sh"
-        info "后续可直接运行: ${CYAN}bash ${INSTALL_DIR}/ksilly.sh${NC}"
+        success "脚本保存到: ${INSTALL_DIR}/ksilly.sh ♡"
+        info "以后直接跑: ${CYAN}bash ${INSTALL_DIR}/ksilly.sh${NC}"
     else
-        warn "脚本保存失败，可稍后重试"
+        warn "脚本保存失败了，不过不影响使用～♡"
     fi
 
     echo ""
     divider
     echo ""
-    echo -e "  ${BOLD}${GREEN}🎉 SillyTavern 安装完成!${NC}"
+    echo -e "  ${BOLD}${PINK}🎉 安装完成了～杂鱼应该感谢本小姐吧♡${NC}"
+    echo ""
+    echo -e "  ${DIM}果然没有本小姐不行呢，杂鱼～${NC}"
     echo ""
     info "安装目录: $INSTALL_DIR"
     show_access_info
@@ -1722,11 +1884,11 @@ full_install() {
     divider
     echo ""
 
-    if confirm "立即启动 SillyTavern?"; then
+    if confirm "现在就启动？杂鱼等不及了吧～♡"; then
         start_sillytavern
     else
         echo ""
-        info "稍后启动方式:"
+        info "好吧，杂鱼想启动的时候用这个:"
         echo -e "    ${CYAN}bash ${INSTALL_DIR}/ksilly.sh${NC}"
         echo -e "    或 ${CYAN}cd ${INSTALL_DIR} && node server.js${NC}"
     fi
@@ -1739,30 +1901,35 @@ main_menu() {
         print_banner
         load_config
 
-        # 状态行
         if check_installed; then
             local version=""
             [[ -f "$INSTALL_DIR/package.json" ]] && \
                 version=$(grep '"version"' "$INSTALL_DIR/package.json" 2>/dev/null | head -1 | sed 's/.*"version".*"\(.*\)".*/\1/')
 
             local status_icon="${RED}●${NC}"
-            is_running && status_icon="${GREEN}●${NC}"
+            local status_word="${RED}已停止${NC}"
+            if is_running; then
+                status_icon="${GREEN}●${NC}"
+                status_word="${GREEN}运行中${NC}"
+            fi
 
             echo -e "  ${status_icon} SillyTavern ${CYAN}v${version:-?}${NC} ${DIM}| ${INSTALL_DIR}${NC}"
+            echo -e "    状态: ${status_word}"
 
-            # 尝试保存/更新本地脚本副本
             [[ ! -f "$INSTALL_DIR/ksilly.sh" ]] && save_script 2>/dev/null
         else
-            echo -e "  ${YELLOW}●${NC} SillyTavern 未安装"
+            echo -e "  ${YELLOW}●${NC} SillyTavern 还没装呢，杂鱼～♡"
         fi
 
         echo ""
         divider
         echo ""
+        echo -e "  ${BOLD}${PINK}♡ 杂鱼想做什么呢～♡${NC}"
+        echo ""
         echo -e "  ${BOLD}安装与管理${NC}"
-        echo -e "    ${GREEN}1)${NC} 安装 SillyTavern"
-        echo -e "    ${GREEN}2)${NC} 更新 SillyTavern"
-        echo -e "    ${GREEN}3)${NC} 卸载 SillyTavern"
+        echo -e "    ${GREEN}1)${NC} 安装 SillyTavern     ${DIM}让本小姐来帮你～♡${NC}"
+        echo -e "    ${GREEN}2)${NC} 更新 SillyTavern     ${DIM}看看有没有新版本～${NC}"
+        echo -e "    ${GREEN}3)${NC} 卸载 SillyTavern     ${DIM}杂鱼不要了吗...♡${NC}"
         echo ""
         echo -e "  ${BOLD}运行控制${NC}"
         echo -e "    ${GREEN}4)${NC} 启动"
@@ -1779,13 +1946,14 @@ main_menu() {
         divider
 
         local choice
-        choice=$(read_input "选择操作")
+        choice=$(read_input "快选一个吧，杂鱼")
 
         case "$choice" in
             1)
                 if check_installed; then
-                    warn "SillyTavern 已安装在 $INSTALL_DIR"
-                    confirm "重新安装?" || continue
+                    warn "已经装过了呢，杂鱼记性不好吗～♡"
+                    warn "安装目录: $INSTALL_DIR"
+                    confirm "重新安装？之前的会被覆盖哦～♡" || continue
                 fi
                 full_install
                 pause_key
@@ -1824,12 +1992,13 @@ main_menu() {
                 ;;
             0)
                 echo ""
-                info "再见~ 👋"
+                echo -e "  ${PINK}♡${NC} 杂鱼要走了吗～下次再来找本小姐吧♡"
+                echo -e "  ${DIM}  ...才不是舍不得你呢，杂鱼！${NC}"
                 echo ""
                 exit 0
                 ;;
             *)
-                warn "无效选项"
+                warn "没有这个选项啦！杂鱼连数字都看不懂吗～♡"
                 sleep 0.5
                 ;;
         esac
@@ -1839,21 +2008,20 @@ main_menu() {
 # ==================== 入口 ====================
 
 main() {
-    # 平台检查
     local uname_s
     uname_s=$(uname -s 2>/dev/null || echo "Unknown")
 
     case "$uname_s" in
         Linux|Darwin) ;;
         *)
-            # 可能是 Termux (也报告 Linux)
             if [[ -z "${TERMUX_VERSION:-}" && ! -d "/data/data/com.termux" ]]; then
-                error "此脚本仅支持 Linux / macOS / Termux"
+                error "这脚本只支持 Linux / macOS / Termux 哦，杂鱼用的什么系统啊～♡"
                 exit 1
             fi
             ;;
     esac
 
+    init_log
     load_config
 
     case "${1:-}" in
@@ -1866,8 +2034,8 @@ main() {
         uninstall) detect_os; load_config; uninstall_sillytavern ;;
         "")        main_menu ;;
         *)
-            echo "用法: $0 {install|update|start|stop|restart|status|uninstall}"
-            echo "  不带参数进入交互式菜单"
+            echo -e "  ${PINK}♡${NC} 用法: $0 {install|update|start|stop|restart|status|uninstall}"
+            echo -e "    不带参数就是交互式菜单哦，杂鱼～♡"
             exit 1
             ;;
     esac
