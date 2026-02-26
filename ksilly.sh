@@ -1845,7 +1845,7 @@ modify_config_menu() {
         echo -e "    端口           ${CYAN}${port_val}${NC}"
         echo -e "    白名单模式     $(format_bool "$whitelist_val")"
         echo -e "    基础认证       $(format_bool "$auth_val")"
-        echo -e "    用户账户系统   $(format_bool "${user_acc:-false}")"
+        echo -e "    多账户系统   $(format_bool "${user_acc:-false}")"
         echo -e "    隐蔽登录       $(format_bool "${discreet:-false}")"
         echo ""
         divider
@@ -1854,8 +1854,8 @@ modify_config_menu() {
         echo -e "  ${GREEN}2)${NC} 修改端口"
         echo -e "  ${GREEN}3)${NC} 修改白名单模式"
         echo -e "  ${GREEN}4)${NC} 修改基础认证"
-        echo -e "  ${GREEN}5)${NC} 修改用户账户系统  ${DIM}(enableUserAccounts)${NC}"
-        echo -e "  ${GREEN}6)${NC} 修改隐蔽登录      ${DIM}(enableDiscreetLogin)${NC}"
+        echo -e "  ${GREEN}5)${NC} 修改多账户系统"
+        echo -e "  ${GREEN}6)${NC} 修改隐蔽登录"
         echo -e "  ${GREEN}7)${NC} 编辑完整配置文件"
         echo -e "  ${GREEN}8)${NC} 重置为默认配置"
         echo -e "  ${GREEN}9)${NC} 防火墙放行管理"
@@ -1939,15 +1939,15 @@ EOF
                 ;;
             5)
                 echo ""
-                echo -e "  当前: 用户账户系统 $(format_bool "${user_acc:-false}")"
+                echo -e "  当前: 多账户系统 $(format_bool "${user_acc:-false}")"
                 echo -e "  ${DIM}开了可以建多个用户~各自独立数据♡${NC}"
                 echo ""
-                if confirm "开启用户账户系统~♡"; then
+                if confirm "开启多账户系统~♡"; then
                     set_yaml_val "enableUserAccounts" "true" "$config_file"
-                    success "用户账户系统开了~♡"
+                    success "多账户系统开了~♡"
                 else
                     set_yaml_val "enableUserAccounts" "false" "$config_file"
-                    info "用户账户系统关了~♡"
+                    info "多账户系统关了~♡"
                 fi
                 ;;
             6)
