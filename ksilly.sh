@@ -10,11 +10,11 @@
 #  Ksilly - 简单 SillyTavern 部署脚本
 #  作者: Mia1889
 #  仓库: https://github.com/Mia1889/Ksilly
-#  版本: 2.2.0
+#  版本: 2.1.0
 #
 
 # ==================== 全局常量 ====================
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.1.0"
 KSILLY_CONF="$HOME/.ksilly.conf"
 DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
 SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
@@ -65,11 +65,6 @@ CURRENT_USER=$(whoami)
 NEED_SUDO=""
 UPDATE_BEHIND=0
 CACHED_PUBLIC_IP=""
-
-# HTTPS/Caddy 相关
-CADDY_ENABLED=false
-CADDY_DOMAIN=""
-CADDY_CERT_MODE=""   # "domain" 或 "selfsigned"
 
 # ==================== 旋转动画 ====================
 
@@ -260,14 +255,14 @@ get_yaml_val() {
     local key="$1" file="$2"
     grep -E "^\s*${key}:" "$file" 2>/dev/null | head -1 | \
         sed "s/^[[:space:]]*${key}:[[:space:]]*//" | \
-        tr -d '\r\n' | sed 's/^["'"'"']$.*$["'"'"']$/\1/' | \
+        tr -d '\r\n' | sed 's/^["'"'"']\(.*\)["'"'"']$/\1/' | \
         sed 's/[[:space:]]*$//'
 }
 
 set_yaml_val() {
     local key="$1" value="$2" file="$3"
     if grep -qE "^\s*${key}:" "$file" 2>/dev/null; then
-        sed -i "s|^$[[:space:]]*$${key}:.*|\1${key}: ${value}|" "$file"
+        sed -i "s|^\([[:space:]]*\)${key}:.*|\1${key}: ${value}|" "$file"
     else
         echo "${key}: ${value}" >> "$file"
     fi
@@ -353,26 +348,7 @@ show_access_info() {
     echo -e "  ${BOLD}访问地址 (记好了哦杂鱼♡):${NC}"
     echo -e "    本机访问   → ${CYAN}http://127.0.0.1:${port}${NC}"
 
-    if [[ "$CADDY_ENABLED" == true ]]; then
-        local local_ip public_ip
-        local_ip=$(get_local_ip)
-        public_ip=$(get_public_ip)
-
-        if [[ "$CADDY_CERT_MODE" == "domain" && -n "$CADDY_DOMAIN" ]]; then
-            echo -e "    公网 HTTPS  → ${GREEN}https://${CADDY_DOMAIN}${NC}"
-        else
-            # 自签名模式
-            [[ "$local_ip" != "无法获取" ]] && \
-                echo -e "    局域网 HTTPS → ${CYAN}https://${local_ip}${NC}"
-            if [[ -n "$public_ip" ]]; then
-                echo -e "    公网 HTTPS   → ${CYAN}https://${public_ip}${NC}"
-            else
-                echo -e "    公网 HTTPS   → ${YELLOW}获取不到公网IP~杂鱼自己查吧♡${NC}"
-            fi
-            echo -e "    ${YELLOW}⚠ 自签名证书~浏览器会弹安全警告,点「高级→继续」就行♡${NC}"
-        fi
-        echo -e "    ${DIM}HTTP 已禁用~只能走 HTTPS 了哦♡${NC}"
-    elif [[ "$listen" == "true" ]]; then
+    if [[ "$listen" == "true" ]]; then
         local local_ip public_ip
         local_ip=$(get_local_ip)
         public_ip=$(get_public_ip)
@@ -394,9 +370,6 @@ load_config() {
     if [[ -f "$KSILLY_CONF" ]]; then
         source "$KSILLY_CONF" 2>/dev/null || true
         INSTALL_DIR="${KSILLY_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
-        CADDY_ENABLED="${KSILLY_CADDY_ENABLED:-false}"
-        CADDY_DOMAIN="${KSILLY_CADDY_DOMAIN:-}"
-        CADDY_CERT_MODE="${KSILLY_CADDY_CERT_MODE:-}"
     else
         INSTALL_DIR="$DEFAULT_INSTALL_DIR"
     fi
@@ -407,9 +380,6 @@ save_config() {
 KSILLY_INSTALL_DIR="${INSTALL_DIR}"
 KSILLY_IS_CHINA="${IS_CHINA}"
 KSILLY_GITHUB_PROXY="${GITHUB_PROXY}"
-KSILLY_CADDY_ENABLED="${CADDY_ENABLED}"
-KSILLY_CADDY_DOMAIN="${CADDY_DOMAIN}"
-KSILLY_CADDY_CERT_MODE="${CADDY_CERT_MODE}"
 EOF
 }
 
@@ -946,578 +916,6 @@ remove_firewall_port() {
     fi
 }
 
-# ==================== HTTPS / Caddy 管理 ====================
-
-get_caddyfile_path() {
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        local prefix
-        prefix=$(brew --prefix 2>/dev/null || echo "/usr/local")
-        echo "${prefix}/etc/Caddyfile"
-    else
-        echo "/etc/caddy/Caddyfile"
-    fi
-}
-
-is_caddy_installed() {
-    command_exists caddy
-}
-
-is_caddy_running() {
-    if [[ "$IS_TERMUX" == true ]]; then
-        return 1
-    fi
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        brew services list 2>/dev/null | grep -q "caddy.*started" && return 0
-        pgrep -x caddy &>/dev/null && return 0
-        return 1
-    elif [[ "$OS_TYPE" == "alpine" ]]; then
-        $NEED_SUDO rc-service caddy status &>/dev/null 2>&1
-    else
-        $NEED_SUDO systemctl is-active caddy &>/dev/null 2>&1
-    fi
-}
-
-caddy_service() {
-    local action="$1"
-    get_sudo || return 1
-
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        case "$action" in
-            start)   brew services start caddy 2>/dev/null ;;
-            stop)    brew services stop caddy 2>/dev/null ;;
-            restart) brew services restart caddy 2>/dev/null ;;
-            reload)  caddy reload --config "$(get_caddyfile_path)" 2>/dev/null || brew services restart caddy 2>/dev/null ;;
-            enable)  : ;;
-            disable) : ;;
-        esac
-    elif [[ "$OS_TYPE" == "alpine" ]]; then
-        case "$action" in
-            start)   $NEED_SUDO rc-service caddy start 2>/dev/null ;;
-            stop)    $NEED_SUDO rc-service caddy stop 2>/dev/null ;;
-            restart) $NEED_SUDO rc-service caddy restart 2>/dev/null ;;
-            reload)  $NEED_SUDO rc-service caddy reload 2>/dev/null || $NEED_SUDO rc-service caddy restart 2>/dev/null ;;
-            enable)  $NEED_SUDO rc-update add caddy default 2>/dev/null ;;
-            disable) $NEED_SUDO rc-update del caddy default 2>/dev/null ;;
-        esac
-    else
-        case "$action" in
-            start)   $NEED_SUDO systemctl start caddy 2>/dev/null ;;
-            stop)    $NEED_SUDO systemctl stop caddy 2>/dev/null ;;
-            restart) $NEED_SUDO systemctl restart caddy 2>/dev/null ;;
-            reload)  $NEED_SUDO systemctl reload caddy 2>/dev/null || $NEED_SUDO systemctl restart caddy 2>/dev/null ;;
-            enable)  $NEED_SUDO systemctl enable caddy 2>/dev/null ;;
-            disable) $NEED_SUDO systemctl disable caddy 2>/dev/null ;;
-        esac
-    fi
-}
-
-install_caddy() {
-    if is_caddy_installed; then
-        info "Caddy $(caddy version 2>/dev/null | awk '{print $1}') 已经有了~♡"
-        return 0
-    fi
-
-    step "帮杂鱼装 Caddy Web 服务器~♡"
-    get_sudo || return 1
-
-    local install_ok=false
-
-    case "$PKG_MANAGER" in
-        apt)
-            spin "安装 Caddy 依赖~♡" $NEED_SUDO apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl
-            if spin_cmd "添加 Caddy 仓库~♡" "curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | $NEED_SUDO gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | $NEED_SUDO tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null"; then
-                spin "刷新仓库~♡" $NEED_SUDO apt-get update -qq
-                spin "安装 Caddy 中~♡" $NEED_SUDO apt-get install -y -qq caddy && install_ok=true
-            fi
-            ;;
-        dnf)
-            spin_cmd "添加 Caddy COPR 仓库~♡" "$NEED_SUDO dnf install -y 'dnf-command(copr)' 2>/dev/null && $NEED_SUDO dnf copr enable -y @caddy/caddy 2>/dev/null"
-            spin "安装 Caddy 中~♡" $NEED_SUDO dnf install -y caddy && install_ok=true
-            ;;
-        yum)
-            spin_cmd "添加 Caddy COPR 仓库~♡" "$NEED_SUDO yum install -y yum-plugin-copr 2>/dev/null && $NEED_SUDO yum copr enable -y @caddy/caddy 2>/dev/null"
-            spin "安装 Caddy 中~♡" $NEED_SUDO yum install -y caddy && install_ok=true
-            ;;
-        pacman)
-            spin "安装 Caddy 中~♡" $NEED_SUDO pacman -S --noconfirm caddy && install_ok=true
-            ;;
-        apk)
-            spin "安装 Caddy 中~♡" $NEED_SUDO apk add caddy && install_ok=true
-            ;;
-        brew)
-            spin "安装 Caddy 中~♡" brew install caddy && install_ok=true
-            ;;
-    esac
-
-    # 包管理器失败时尝试下载二进制
-    if [[ "$install_ok" != true ]]; then
-        warn "包管理器装不上~试试下载二进制♡"
-        install_caddy_binary && install_ok=true
-    fi
-
-    if [[ "$install_ok" == true ]] && is_caddy_installed; then
-        success "Caddy 装好了~♡"
-        return 0
-    else
-        error "Caddy 装不上~杂鱼的环境有问题♡"
-        return 1
-    fi
-}
-
-install_caddy_binary() {
-    local arch=""
-    case "$(uname -m)" in
-        x86_64|amd64)  arch="amd64"  ;;
-        aarch64|arm64) arch="arm64"  ;;
-        armv7l)        arch="armv7"  ;;
-        *) error "不支持的架构 $(uname -m)~♡"; return 1 ;;
-    esac
-
-    local os="linux"
-    [[ "$(uname)" == "Darwin" ]] && os="mac"
-
-    local caddy_ver="2.9.1"
-    local url="https://github.com/caddyserver/caddy/releases/download/v${caddy_ver}/caddy_${caddy_ver}_${os}_${arch}.tar.gz"
-
-    [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]] && url="${GITHUB_PROXY}${url}"
-
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-
-    if spin "下载 Caddy v${caddy_ver} 二进制~♡" curl -fSL -o "${tmp_dir}/caddy.tar.gz" "$url"; then
-        spin_cmd "安装 Caddy 二进制~♡" "cd '${tmp_dir}' && tar xzf caddy.tar.gz && ${NEED_SUDO:+$NEED_SUDO }mv caddy /usr/local/bin/caddy && ${NEED_SUDO:+$NEED_SUDO }chmod +x /usr/local/bin/caddy"
-
-        # 手动创建 systemd 服务 (非 macOS/Alpine)
-        if [[ "$OS_TYPE" != "macos" && "$OS_TYPE" != "alpine" ]]; then
-            $NEED_SUDO mkdir -p /etc/caddy
-            $NEED_SUDO groupadd --system caddy 2>/dev/null || true
-            $NEED_SUDO useradd --system --gid caddy --create-home --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
-
-            $NEED_SUDO tee /etc/systemd/system/caddy.service >/dev/null << 'SVCEOF'
-[Unit]
-Description=Caddy
-After=network.target network-online.target
-Requires=network-online.target
-
-[Service]
-Type=notify
-User=caddy
-Group=caddy
-ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
-TimeoutStopSec=5s
-LimitNOFILE=1048576
-LimitNPROC=512
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF
-            $NEED_SUDO systemctl daemon-reload 2>/dev/null
-        fi
-
-        rm -rf "$tmp_dir"
-        hash -r 2>/dev/null || true
-        return 0
-    fi
-
-    rm -rf "$tmp_dir"
-    return 1
-}
-
-generate_caddyfile() {
-    local port
-    port=$(get_port)
-    local caddyfile_path
-    caddyfile_path=$(get_caddyfile_path)
-
-    get_sudo || return 1
-
-    # 确保目录存在
-    $NEED_SUDO mkdir -p "$(dirname "$caddyfile_path")" 2>/dev/null
-
-    # 备份已有 Caddyfile
-    if [[ -f "$caddyfile_path" ]]; then
-        $NEED_SUDO cp "$caddyfile_path" "${caddyfile_path}.bak.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
-    fi
-
-    local caddyfile_content=""
-
-    if [[ "$CADDY_CERT_MODE" == "domain" && -n "$CADDY_DOMAIN" ]]; then
-        # 域名模式: 自动 Let's Encrypt
-        caddyfile_content="${CADDY_DOMAIN} {
-    reverse_proxy 127.0.0.1:${port}
-}
-"
-    else
-        # 自签名模式: tls internal
-        caddyfile_content=":443 {
-    tls internal
-    reverse_proxy 127.0.0.1:${port}
-}
-"
-    fi
-
-    echo "$caddyfile_content" | $NEED_SUDO tee "$caddyfile_path" >/dev/null
-
-    # 确保 Caddy 用户能读取配置
-    $NEED_SUDO chmod 644 "$caddyfile_path" 2>/dev/null
-
-    # 确保 Caddy 数据目录存在并且权限正确
-    if id caddy &>/dev/null; then
-        $NEED_SUDO mkdir -p /var/lib/caddy/.local/share/caddy 2>/dev/null
-        $NEED_SUDO chown -R caddy:caddy /var/lib/caddy 2>/dev/null
-    fi
-
-    info "Caddyfile 写好了~♡"
-    echo -e "    路径: ${DIM}${caddyfile_path}${NC}"
-}
-
-setup_https() {
-    # Termux 跳过
-    if [[ "$IS_TERMUX" == true ]]; then
-        info "Termux 上没法搞 HTTPS~跳过♡"
-        return 1
-    fi
-
-    echo ""
-    divider
-    echo -e "  ${BOLD}${PINK}HTTPS 安全配置~人家帮杂鱼搞加密♡${NC}"
-    divider
-    echo ""
-    echo -e "  ${DIM}用明文 HTTP 暴露在公网超级不安全的好吗杂鱼!${NC}"
-    echo -e "  ${DIM}人家用 Caddy 帮你自动搞 HTTPS~傻瓜式操作♡${NC}"
-    echo ""
-
-    if ! confirm "要设置 HTTPS 访问吗~♡"; then
-        info "不设 HTTPS 啊~那杂鱼小心点哦♡"
-        return 1
-    fi
-
-    # 安装 Caddy
-    install_caddy || return 1
-
-    # 询问有没有域名
-    echo ""
-    echo -e "  ${BOLD}证书类型${NC}"
-    echo -e "    ${GREEN}1)${NC} 我有域名  ${DIM}(自动申请 Let's Encrypt 免费证书~推荐♡)${NC}"
-    echo -e "    ${GREEN}2)${NC} 没有域名  ${DIM}(用自签名证书~浏览器会有警告但也是加密的♡)${NC}"
-    echo ""
-
-    local cert_choice=""
-    while [[ "$cert_choice" != "1" && "$cert_choice" != "2" ]]; do
-        cert_choice=$(read_input "杂鱼选一个~" "2")
-    done
-
-    local port
-    port=$(get_port)
-
-    if [[ "$cert_choice" == "1" ]]; then
-        # 域名模式
-        CADDY_CERT_MODE="domain"
-        echo ""
-        local domain=""
-        while [[ -z "$domain" ]]; do
-            domain=$(read_input "输入域名~(例如 st.example.com)")
-            if [[ -z "$domain" ]]; then
-                warn "域名不能空着~杂鱼♡"
-            elif [[ "$domain" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                warn "这是 IP 不是域名啦~没域名就选自签名吧笨蛋♡"
-                domain=""
-            fi
-        done
-        CADDY_DOMAIN="$domain"
-
-        echo ""
-        warn "注意事项~杂鱼仔细看♡"
-        echo -e "    ${YELLOW}1. 域名 ${CYAN}${domain}${YELLOW} 的 DNS 必须已经指向这台服务器的 IP${NC}"
-        echo -e "    ${YELLOW}2. 端口 80 和 443 必须能从外网访问 (安全组/防火墙)${NC}"
-        echo -e "    ${YELLOW}3. Caddy 会自动申请和续期 Let's Encrypt 证书${NC}"
-        echo ""
-
-        if ! confirm "以上都搞好了吗~杂鱼♡"; then
-            warn "那先去搞好再来~人家等着♡"
-            CADDY_DOMAIN=""
-            CADDY_CERT_MODE=""
-            return 1
-        fi
-
-        # 生成 Caddyfile
-        generate_caddyfile
-
-        # 防火墙: 开 80 和 443，关 ST 端口
-        open_firewall_port 80
-        open_firewall_port 443
-        remove_firewall_port "$port"
-
-    else
-        # 自签名模式
-        CADDY_CERT_MODE="selfsigned"
-        CADDY_DOMAIN=""
-
-        echo ""
-        info "用自签名证书~一样是 HTTPS 加密传输♡"
-        warn "浏览器会弹安全警告~点「高级→继续访问」就行了杂鱼♡"
-        echo ""
-
-        # 生成 Caddyfile
-        generate_caddyfile
-
-        # 防火墙: 开 443，关 ST 端口
-        open_firewall_port 443
-        remove_firewall_port "$port"
-    fi
-
-    # 关键: 设置 SillyTavern 只监听 localhost，禁止 HTTP 直接外部访问
-    local config_file="$INSTALL_DIR/config.yaml"
-    set_yaml_val "listen" "false" "$config_file"
-    info "SillyTavern 已设为仅本地监听~外部流量全走 Caddy HTTPS♡"
-
-    # 启动 Caddy
-    caddy_service enable
-    caddy_service restart
-
-    sleep 2
-
-    if is_caddy_running; then
-        CADDY_ENABLED=true
-        save_config
-        echo ""
-        success "HTTPS 配好了~人家好厉害吧♡"
-
-        if [[ "$CADDY_CERT_MODE" == "selfsigned" ]]; then
-            echo ""
-            echo -e "  ${BOLD}关于自签名证书~♡${NC}"
-            echo -e "    ${DIM}浏览器会显示「不安全」警告~这是正常的♡${NC}"
-            echo -e "    ${DIM}点「高级」→「继续前往」就能用了~${NC}"
-            echo ""
-
-            # 显示 CA 证书位置供高级用户使用
-            local ca_path=""
-            if [[ -f "/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt" ]]; then
-                ca_path="/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt"
-            elif [[ -f "$HOME/.local/share/caddy/pki/authorities/local/root.crt" ]]; then
-                ca_path="$HOME/.local/share/caddy/pki/authorities/local/root.crt"
-            fi
-            if [[ -n "$ca_path" ]]; then
-                echo -e "  ${DIM}高级用户: 把根 CA 证书装到设备上就不会有警告了~${NC}"
-                echo -e "  ${DIM}CA 证书: ${ca_path}${NC}"
-            fi
-        fi
-    else
-        error "Caddy 启动失败了~杂鱼检查一下♡"
-        echo -e "    ${DIM}试试: ${CYAN}${NEED_SUDO:+$NEED_SUDO }journalctl -u caddy --no-pager -n 20${NC}"
-        CADDY_ENABLED=false
-        # 恢复 ST 监听，防火墙恢复
-        set_yaml_val "listen" "true" "$config_file"
-        open_firewall_port "$port"
-        save_config
-        return 1
-    fi
-
-    return 0
-}
-
-remove_https() {
-    if [[ "$CADDY_ENABLED" != true ]]; then
-        info "本来就没开 HTTPS~杂鱼♡"
-        return 0
-    fi
-
-    echo ""
-    warn "要关掉 HTTPS 了~会恢复成 HTTP 直接访问♡"
-
-    if ! confirm "确定关掉 HTTPS~♡"; then
-        info "那就留着~♡"
-        return 0
-    fi
-
-    get_sudo || return 1
-
-    # 停止 Caddy
-    caddy_service stop
-    caddy_service disable
-
-    # 恢复 Caddyfile
-    local caddyfile_path
-    caddyfile_path=$(get_caddyfile_path)
-    # 写一个空的默认 Caddyfile
-    echo "# Caddy 配置已被 Ksilly 清除" | $NEED_SUDO tee "$caddyfile_path" >/dev/null
-
-    # 恢复 SillyTavern 的监听设置
-    local config_file="$INSTALL_DIR/config.yaml"
-    local port
-    port=$(get_port)
-
-    set_yaml_val "listen" "true" "$config_file"
-    info "SillyTavern 恢复公网监听~♡"
-
-    # 防火墙: 关 443/80，开 ST 端口
-    remove_firewall_port 443
-    remove_firewall_port 80
-    open_firewall_port "$port"
-
-    CADDY_ENABLED=false
-    CADDY_DOMAIN=""
-    CADDY_CERT_MODE=""
-    save_config
-
-    success "HTTPS 关掉了~杂鱼回到 HTTP 裸奔了♡"
-
-    if is_running; then
-        echo ""
-        warn "重启一下 SillyTavern 让配置生效~♡"
-        if confirm "现在重启~♡"; then
-            restart_sillytavern
-        fi
-    fi
-}
-
-https_management_menu() {
-    if ! check_installed; then
-        error "都还没装呢~杂鱼♡"
-        return 1
-    fi
-
-    if [[ "$IS_TERMUX" == true ]]; then
-        warn "Termux 不支持 HTTPS 设置~端口 443 需要 root 权限♡"
-        return 1
-    fi
-
-    while true; do
-        print_banner
-
-        echo -e "  ${BOLD}${PINK}HTTPS 管理 (Caddy)~♡${NC}"
-        divider
-        echo ""
-
-        # 状态显示
-        echo -e "  ${BOLD}当前状态${NC}"
-        if [[ "$CADDY_ENABLED" == true ]]; then
-            echo -e "    HTTPS      ${GREEN}● 已启用${NC}"
-            if [[ "$CADDY_CERT_MODE" == "domain" ]]; then
-                echo -e "    证书类型   ${GREEN}Let's Encrypt (自动)${NC}"
-                echo -e "    域名       ${CYAN}${CADDY_DOMAIN}${NC}"
-            else
-                echo -e "    证书类型   ${YELLOW}自签名 (内部 CA)${NC}"
-            fi
-            if is_caddy_running; then
-                echo -e "    Caddy      ${GREEN}● 运行中${NC}"
-            else
-                echo -e "    Caddy      ${RED}● 已停止${NC}"
-            fi
-        else
-            echo -e "    HTTPS      ${DIM}未启用${NC}"
-            if is_caddy_installed; then
-                echo -e "    Caddy      ${DIM}已安装但未配置${NC}"
-            else
-                echo -e "    Caddy      ${DIM}未安装${NC}"
-            fi
-        fi
-
-        echo ""
-        divider
-        echo ""
-
-        if [[ "$CADDY_ENABLED" == true ]]; then
-            echo -e "  ${GREEN}1)${NC} 重新配置 HTTPS"
-            echo -e "  ${GREEN}2)${NC} 关闭 HTTPS (恢复 HTTP)"
-            echo -e "  ${GREEN}3)${NC} 重启 Caddy"
-            echo -e "  ${GREEN}4)${NC} 查看 Caddy 日志"
-            echo -e "  ${GREEN}5)${NC} 查看 Caddyfile"
-        else
-            echo -e "  ${GREEN}1)${NC} 启用 HTTPS"
-        fi
-        echo ""
-        echo -e "  ${RED}0)${NC} 返回~♡"
-        echo ""
-        divider
-
-        local choice
-        choice=$(read_input "杂鱼选一个~")
-
-        if [[ "$CADDY_ENABLED" == true ]]; then
-            case "$choice" in
-                1)
-                    # 先关掉再重新配
-                    caddy_service stop
-                    CADDY_ENABLED=false
-                    CADDY_DOMAIN=""
-                    CADDY_CERT_MODE=""
-                    setup_https
-                    if is_running; then
-                        warn "重启 SillyTavern 让配置生效~♡"
-                        if confirm "现在重启~♡"; then
-                            restart_sillytavern
-                        fi
-                    fi
-                    ;;
-                2)
-                    remove_https
-                    ;;
-                3)
-                    caddy_service restart
-                    sleep 1
-                    if is_caddy_running; then
-                        success "Caddy 重启好了~♡"
-                    else
-                        error "Caddy 重启失败~♡"
-                    fi
-                    ;;
-                4)
-                    echo ""
-                    if [[ "$OS_TYPE" == "alpine" ]]; then
-                        $NEED_SUDO cat /var/log/caddy/*.log 2>/dev/null | tail -30 || warn "找不到日志~♡"
-                    elif [[ "$OS_TYPE" == "macos" ]]; then
-                        local prefix
-                        prefix=$(brew --prefix 2>/dev/null || echo "/usr/local")
-                        cat "${prefix}/var/log/caddy.log" 2>/dev/null | tail -30 || warn "找不到日志~♡"
-                    else
-                        $NEED_SUDO journalctl -u caddy --no-pager -n 30 2>/dev/null || warn "找不到日志~♡"
-                    fi
-                    ;;
-                5)
-                    echo ""
-                    local cf_path
-                    cf_path=$(get_caddyfile_path)
-                    echo -e "  ${DIM}${cf_path}:${NC}"
-                    echo ""
-                    $NEED_SUDO cat "$cf_path" 2>/dev/null | while IFS= read -r line; do
-                        echo -e "    ${CYAN}${line}${NC}"
-                    done
-                    ;;
-                0) return 0 ;;
-                *) warn "没这个选项~杂鱼♡" ;;
-            esac
-        else
-            case "$choice" in
-                1)
-                    # 检查 listen 状态
-                    local listen_val
-                    listen_val=$(get_yaml_val "listen" "$INSTALL_DIR/config.yaml")
-                    if [[ "$listen_val" != "true" ]]; then
-                        warn "你还没开公网监听呢~先去配置里开了监听再来♡"
-                        echo -e "    ${DIM}菜单 8 → 选项 1 → 开启监听${NC}"
-                    else
-                        setup_https
-                        if is_running; then
-                            warn "重启一下 SillyTavern 让配置生效~♡"
-                            if confirm "现在重启~♡"; then
-                                restart_sillytavern
-                            fi
-                        fi
-                    fi
-                    ;;
-                0) return 0 ;;
-                *) warn "没这个选项~杂鱼♡" ;;
-            esac
-        fi
-
-        pause_key
-    done
-}
-
 # ==================== 插件管理 ====================
 
 get_plugin_dir() {
@@ -1536,13 +934,13 @@ get_plugin_version() {
 
     if [[ -f "$plugin_path/manifest.json" ]]; then
         local ver
-        ver=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$plugin_path/manifest.json" 2>/dev/null | head -1 | sed 's/.*"$[^"]*$"$/\1/')
+        ver=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$plugin_path/manifest.json" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
         [[ -n "$ver" ]] && echo "$ver" && return
     fi
 
     if [[ -f "$plugin_path/package.json" ]]; then
         local ver
-        ver=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$plugin_path/package.json" 2>/dev/null | head -1 | sed 's/.*"$[^"]*$"$/\1/')
+        ver=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$plugin_path/package.json" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
         [[ -n "$ver" ]] && echo "$ver" && return
     fi
 
@@ -1598,6 +996,7 @@ install_single_plugin() {
         return 0
     fi
 
+    # 第一源失败，尝试备用源
     warn "第一个源失败了~换一个试试♡"
     local fallback_url
     if [[ "$IS_CHINA" == true ]]; then
@@ -1667,6 +1066,7 @@ update_single_plugin() {
 
     echo -e "    当前版本: ${CYAN}$(get_plugin_version "$folder")${NC}"
 
+    # 设置正确的远程 URL
     local repo_url
     if [[ "$IS_CHINA" == true ]]; then
         repo_url="$repo_cn"
@@ -1701,7 +1101,9 @@ plugin_menu() {
         return 1
     fi
 
+    # 检测网络（如果还没检测过）
     if [[ -z "$GITHUB_PROXY" && "$IS_CHINA" == false ]]; then
+        # 尝试从配置加载
         if [[ -f "$KSILLY_CONF" ]]; then
             source "$KSILLY_CONF" 2>/dev/null || true
             IS_CHINA="${KSILLY_IS_CHINA:-false}"
@@ -1716,9 +1118,11 @@ plugin_menu() {
         divider
         echo ""
 
+        # 显示插件状态
         echo -e "  ${BOLD}已收录插件${NC}"
         echo ""
 
+        # 插件1状态
         if is_plugin_installed "$PLUGIN_1_FOLDER"; then
             local p1_ver
             p1_ver=$(get_plugin_version "$PLUGIN_1_FOLDER")
@@ -1730,6 +1134,7 @@ plugin_menu() {
         fi
         echo ""
 
+        # 插件2状态
         if is_plugin_installed "$PLUGIN_2_FOLDER"; then
             local p2_ver
             p2_ver=$(get_plugin_version "$PLUGIN_2_FOLDER")
@@ -1842,6 +1247,7 @@ plugin_menu() {
                 ;;
         esac
 
+        # 安装/卸载/更新后提示重启
         if [[ "$need_restart" == true ]] && is_running; then
             echo ""
             warn "插件变动后重启一下 SillyTavern 才能生效哦~♡"
@@ -2008,8 +1414,8 @@ configure_sillytavern() {
 
         if grep -q "basicAuthUser:" "$config_file" 2>/dev/null; then
             sed -i "/basicAuthUser:/,/^[^ #]/{
-                s|$\s*$username:.*|\1username: \"${auth_user}\"|
-                s|$\s*$password:.*|\1password: \"${auth_pass}\"|
+                s|\(\s*\)username:.*|\1username: \"${auth_user}\"|
+                s|\(\s*\)password:.*|\1password: \"${auth_pass}\"|
             }" "$config_file"
         else
             cat >> "$config_file" << EOF
@@ -2025,18 +1431,10 @@ EOF
         info "不设认证啊~胆子挺大的杂鱼♡"
     fi
 
-    # --- HTTPS 设置 (仅在开启了公网监听时) ---
+    # --- 防火墙 ---
     if [[ "$listen_enabled" == true ]]; then
-        local https_configured=false
-        if setup_https; then
-            https_configured=true
-        fi
-
-        # 如果没有配 HTTPS，才走传统的防火墙放行 ST 端口
-        if [[ "$https_configured" != true ]]; then
-            echo ""
-            open_firewall_port "$port"
-        fi
+        echo ""
+        open_firewall_port "$port"
     fi
 
     echo ""
@@ -2170,22 +1568,6 @@ show_status() {
         echo -e "    进程管理   ${GREEN}PM2${NC}"
     else
         echo -e "    进程管理   ${DIM}没配置♡${NC}"
-    fi
-
-    # HTTPS 状态
-    if [[ "$CADDY_ENABLED" == true ]]; then
-        if [[ "$CADDY_CERT_MODE" == "domain" ]]; then
-            echo -e "    HTTPS      ${GREEN}● 域名证书 (${CADDY_DOMAIN})${NC}"
-        else
-            echo -e "    HTTPS      ${YELLOW}● 自签名证书${NC}"
-        fi
-        if is_caddy_running; then
-            echo -e "    Caddy      ${GREEN}● 运行中${NC}"
-        else
-            echo -e "    Caddy      ${RED}● 已停止${NC}"
-        fi
-    else
-        echo -e "    HTTPS      ${DIM}未启用${NC}"
     fi
 
     echo ""
@@ -2392,20 +1774,6 @@ uninstall_sillytavern() {
     port=$(get_port)
     remove_firewall_port "$port"
 
-    # 清理 Caddy HTTPS
-    if [[ "$CADDY_ENABLED" == true ]]; then
-        info "清理 HTTPS 配置中~♡"
-        caddy_service stop
-        caddy_service disable
-        local caddyfile_path
-        caddyfile_path=$(get_caddyfile_path)
-        echo "# Caddy 配置已被 Ksilly 清除" | $NEED_SUDO tee "$caddyfile_path" >/dev/null 2>&1
-        remove_firewall_port 443
-        remove_firewall_port 80
-        CADDY_ENABLED=false
-        info "HTTPS 配置清理完了~♡"
-    fi
-
     if [[ "$IS_TERMUX" != true ]] && command_exists systemctl; then
         if $NEED_SUDO systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
             get_sudo
@@ -2428,21 +1796,6 @@ uninstall_sillytavern() {
     spin "删除安装目录中~♡" rm -rf "$INSTALL_DIR"
     rm -f "$KSILLY_CONF"
     success "SillyTavern 卸载完了~再见了♡"
-
-    echo ""
-    if confirm "顺便把 Caddy 也删了~♡"; then
-        get_sudo
-        case "$PKG_MANAGER" in
-            apt)    spin_cmd "卸载 Caddy 中~♡" "$NEED_SUDO apt-get remove -y caddy 2>/dev/null; $NEED_SUDO rm -f /etc/apt/sources.list.d/caddy-stable.list /usr/share/keyrings/caddy-stable-archive-keyring.gpg" ;;
-            dnf)    spin "卸载 Caddy 中~♡" $NEED_SUDO dnf remove -y caddy ;;
-            yum)    spin "卸载 Caddy 中~♡" $NEED_SUDO yum remove -y caddy ;;
-            pacman) spin "卸载 Caddy 中~♡" $NEED_SUDO pacman -R --noconfirm caddy ;;
-            apk)    spin "卸载 Caddy 中~♡" $NEED_SUDO apk del caddy ;;
-            brew)   spin "卸载 Caddy 中~♡" brew uninstall caddy ;;
-            *)      $NEED_SUDO rm -f /usr/local/bin/caddy 2>/dev/null ;;
-        esac
-        info "Caddy 删掉了~♡"
-    fi
 
     echo ""
     if confirm "顺便把 Node.js 也删了~♡"; then
@@ -2492,35 +1845,22 @@ modify_config_menu() {
         echo -e "    端口           ${CYAN}${port_val}${NC}"
         echo -e "    白名单模式     $(format_bool "$whitelist_val")"
         echo -e "    基础认证       $(format_bool "$auth_val")"
-        echo -e "    多账户系统     $(format_bool "${user_acc:-false}")"
+        echo -e "    多账户系统   $(format_bool "${user_acc:-false}")"
         echo -e "    隐蔽登录       $(format_bool "${discreet:-false}")"
-
-        # HTTPS 状态
-        if [[ "$CADDY_ENABLED" == true ]]; then
-            if [[ "$CADDY_CERT_MODE" == "domain" ]]; then
-                echo -e "    HTTPS          ${GREEN}● 域名证书 (${CADDY_DOMAIN})${NC}"
-            else
-                echo -e "    HTTPS          ${YELLOW}● 自签名证书${NC}"
-            fi
-        else
-            echo -e "    HTTPS          ${DIM}未启用${NC}"
-        fi
-
         echo ""
         divider
         echo ""
-        echo -e "  ${GREEN} 1)${NC} 修改监听设置"
-        echo -e "  ${GREEN} 2)${NC} 修改端口"
-        echo -e "  ${GREEN} 3)${NC} 修改白名单模式"
-        echo -e "  ${GREEN} 4)${NC} 修改基础认证"
-        echo -e "  ${GREEN} 5)${NC} 修改多账户系统"
-        echo -e "  ${GREEN} 6)${NC} 修改隐蔽登录"
-        echo -e "  ${GREEN} 7)${NC} 编辑完整配置文件"
-        echo -e "  ${GREEN} 8)${NC} 重置为默认配置"
-        echo -e "  ${GREEN} 9)${NC} 防火墙放行管理"
-        echo -e "  ${GREEN}10)${NC} HTTPS 管理 (Caddy)"
+        echo -e "  ${GREEN}1)${NC} 修改监听设置"
+        echo -e "  ${GREEN}2)${NC} 修改端口"
+        echo -e "  ${GREEN}3)${NC} 修改白名单模式"
+        echo -e "  ${GREEN}4)${NC} 修改基础认证"
+        echo -e "  ${GREEN}5)${NC} 修改多账户系统"
+        echo -e "  ${GREEN}6)${NC} 修改隐蔽登录"
+        echo -e "  ${GREEN}7)${NC} 编辑完整配置文件"
+        echo -e "  ${GREEN}8)${NC} 重置为默认配置"
+        echo -e "  ${GREEN}9)${NC} 防火墙放行管理"
         echo ""
-        echo -e "  ${RED} 0)${NC} 返回主菜单~♡"
+        echo -e "  ${RED}0)${NC} 返回主菜单~♡"
         echo ""
         divider
 
@@ -2531,19 +1871,13 @@ modify_config_menu() {
             1)
                 echo ""
                 echo -e "  当前: 监听 $(format_bool "$listen_val")"
-
-                if [[ "$CADDY_ENABLED" == true ]]; then
-                    warn "HTTPS (Caddy) 已启用~监听设置由 Caddy 管理♡"
-                    warn "如果要改监听设置~请先关掉 HTTPS (选项 10)♡"
+                if confirm "开启监听~♡"; then
+                    set_yaml_val "listen" "true" "$config_file"
+                    success "监听开了~♡"
+                    open_firewall_port "$(get_port)"
                 else
-                    if confirm "开启监听~♡"; then
-                        set_yaml_val "listen" "true" "$config_file"
-                        success "监听开了~♡"
-                        open_firewall_port "$(get_port)"
-                    else
-                        set_yaml_val "listen" "false" "$config_file"
-                        info "监听关了~♡"
-                    fi
+                    set_yaml_val "listen" "false" "$config_file"
+                    info "监听关了~♡"
                 fi
                 ;;
             2)
@@ -2554,17 +1888,9 @@ modify_config_menu() {
                 if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
                     set_yaml_val "port" "$new_port" "$config_file"
                     success "端口改成 $new_port 了~♡"
-
-                    # 如果 Caddy 已启用，更新 Caddyfile
-                    if [[ "$CADDY_ENABLED" == true ]]; then
-                        info "同步更新 Caddy 配置~♡"
-                        generate_caddyfile
-                        caddy_service reload
-                    else
-                        local cur_listen
-                        cur_listen=$(get_yaml_val "listen" "$config_file")
-                        [[ "$cur_listen" == "true" ]] && open_firewall_port "$new_port"
-                    fi
+                    local cur_listen
+                    cur_listen=$(get_yaml_val "listen" "$config_file")
+                    [[ "$cur_listen" == "true" ]] && open_firewall_port "$new_port"
                 else
                     error "这什么端口~$new_port ~杂鱼乱填♡"
                 fi
@@ -2655,9 +1981,6 @@ EOF
                 ;;
             9)
                 open_firewall_port "$(get_port)"
-                ;;
-            10)
-                https_management_menu
                 ;;
             0)
                 return 0
@@ -2890,15 +2213,6 @@ main_menu() {
             is_plugin_installed "$PLUGIN_2_FOLDER" && ((p_count++))
             [[ "$p_count" -gt 0 ]] && echo -e "  ${DIM}  插件: ${p_count} 个已安装${NC}"
 
-            # 显示 HTTPS 状态
-            if [[ "$CADDY_ENABLED" == true ]]; then
-                if [[ "$CADDY_CERT_MODE" == "domain" ]]; then
-                    echo -e "  ${DIM}  HTTPS: ${GREEN}●${NC}${DIM} ${CADDY_DOMAIN}${NC}"
-                else
-                    echo -e "  ${DIM}  HTTPS: ${YELLOW}●${NC}${DIM} 自签名证书${NC}"
-                fi
-            fi
-
             [[ ! -f "$INSTALL_DIR/ksilly.sh" ]] && save_script 2>/dev/null
         else
             echo -e "  ${YELLOW}●${NC} SillyTavern 还没装呢~杂鱼♡"
@@ -2922,7 +2236,6 @@ main_menu() {
         echo -e "    ${GREEN} 8)${NC} 修改配置"
         echo -e "    ${GREEN} 9)${NC} 后台运行管理 (PM2)"
         echo -e "    ${GREEN}10)${NC} 插件管理"
-        echo -e "    ${GREEN}11)${NC} HTTPS 管理 (Caddy)"
         echo ""
         echo -e "     ${RED}0)${NC} 退出~♡"
         echo ""
@@ -2975,11 +2288,6 @@ main_menu() {
             10)
                 plugin_menu
                 ;;
-            11)
-                detect_os
-                [[ "$IS_TERMUX" != true ]] && get_sudo 2>/dev/null
-                https_management_menu
-                ;;
             0)
                 echo ""
                 info "哼~走了就走了~才不会想你呢杂鱼♡ 👋"
@@ -3021,10 +2329,9 @@ main() {
         status)    load_config; show_status ;;
         uninstall) detect_os; load_config; uninstall_sillytavern ;;
         plugins)   load_config; plugin_menu ;;
-        https)     detect_os; load_config; [[ "$IS_TERMUX" != true ]] && get_sudo 2>/dev/null; https_management_menu ;;
         "")        main_menu ;;
         *)
-            echo "用法: $0 {install|update|start|stop|restart|status|uninstall|plugins|https}"
+            echo "用法: $0 {install|update|start|stop|restart|status|uninstall|plugins}"
             echo "  不带参数进入菜单~杂鱼♡"
             exit 1
             ;;
