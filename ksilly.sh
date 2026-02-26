@@ -10,13 +10,13 @@
 #  Ksilly - 简单 SillyTavern 部署脚本
 #  作者: Mia1889
 #  仓库: https://github.com/Mia1889/Ksilly
-#  版本: 1.0.1
+#  版本: 1.0.2
 #
 
 set -euo pipefail
 
 # ==================== 全局常量 ====================
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="1.0.2"
 KSILLY_CONF="$HOME/.ksilly.conf"
 DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
 SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
@@ -79,7 +79,6 @@ divider() {
     echo -e "  ${PURPLE}─────────────────────────────────────────${NC}"
 }
 
-# 用户确认 (无默认值，必须选择)
 confirm_no_default() {
     local prompt="$1"
     local result=""
@@ -94,7 +93,6 @@ confirm_no_default() {
     done
 }
 
-# 读取用户输入 — 提示走 stderr，只有结果走 stdout
 read_input() {
     local prompt="$1"
     local default="${2:-}"
@@ -111,7 +109,6 @@ read_input() {
     echo "$result"
 }
 
-# 读取密码输入 — 提示走 stderr
 read_password() {
     local prompt="$1"
     local result=""
@@ -126,7 +123,150 @@ read_password() {
     echo "$result"
 }
 
-# 加载配置
+# ==================== 新增: 安全读取配置值 ====================
+# 从 config.yaml 中读取值并清除 \r、空格等脏字符
+
+get_yaml_val() {
+    local key="$1"
+    local file="$2"
+    grep -E "^\s*${key}:" "$file" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '\r\n "'\'''
+}
+
+# 获取端口
+get_port() {
+    local port
+    port=$(get_yaml_val "port" "$INSTALL_DIR/config.yaml")
+    # 如果为空或不是数字则默认 8000
+    if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+        port="8000"
+    fi
+    echo "$port"
+}
+
+# 获取本机局域网 IP（优先级: ip route > ip addr > hostname -I）
+get_local_ip() {
+    local ip=""
+
+    # 方法1: 通过默认路由的 src 获取主 IP（最准确）
+    if command_exists ip; then
+        ip=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[\d.]+' | head -1)
+    fi
+
+    # 方法2: 从 ip addr 中提取非 127 的第一个 IPv4
+    if [[ -z "$ip" ]] && command_exists ip; then
+        ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+    fi
+
+    # 方法3: hostname -I
+    if [[ -z "$ip" ]]; then
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+
+    # 方法4: ifconfig
+    if [[ -z "$ip" ]] && command_exists ifconfig; then
+        ip=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | sed 's/addr://')
+    fi
+
+    # 最终兜底
+    if [[ -z "$ip" ]]; then
+        ip="<你的服务器IP>"
+    fi
+
+    echo "$ip"
+}
+
+# ==================== 新增: 防火墙管理 ====================
+
+# 检测并放行防火墙端口
+open_firewall_port() {
+    local port="$1"
+
+    get_sudo
+
+    step "检查防火墙并放行端口 ${port}..."
+
+    local firewall_found=false
+
+    # ---- UFW (Ubuntu/Debian 常用) ----
+    if command_exists ufw; then
+        local ufw_status
+        ufw_status=$($NEED_SUDO ufw status 2>/dev/null | head -1 || true)
+        if echo "$ufw_status" | grep -qi "active"; then
+            firewall_found=true
+            info "检测到 UFW 防火墙已启用"
+            if $NEED_SUDO ufw status | grep -qw "$port"; then
+                info "端口 $port 已在 UFW 放行规则中"
+            else
+                info "正在放行端口 $port (tcp)..."
+                $NEED_SUDO ufw allow "$port/tcp" >/dev/null 2>&1
+                success "UFW 已放行端口 $port/tcp"
+            fi
+        else
+            info "UFW 未启用，无需配置"
+        fi
+    fi
+
+    # ---- firewalld (CentOS/RHEL/Fedora 常用) ----
+    if command_exists firewall-cmd; then
+        local fwd_state
+        fwd_state=$($NEED_SUDO firewall-cmd --state 2>/dev/null || true)
+        if [[ "$fwd_state" == "running" ]]; then
+            firewall_found=true
+            info "检测到 firewalld 防火墙已启用"
+            if $NEED_SUDO firewall-cmd --list-ports 2>/dev/null | grep -qw "${port}/tcp"; then
+                info "端口 $port 已在 firewalld 放行规则中"
+            else
+                info "正在放行端口 $port (tcp)..."
+                $NEED_SUDO firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
+                $NEED_SUDO firewall-cmd --reload >/dev/null 2>&1
+                success "firewalld 已放行端口 $port/tcp"
+            fi
+        else
+            info "firewalld 未运行，无需配置"
+        fi
+    fi
+
+    # ---- iptables (通用兜底) ----
+    if [[ "$firewall_found" == false ]] && command_exists iptables; then
+        # 检查 iptables 是否有 DROP/REJECT 规则 (说明在用 iptables 做防火墙)
+        local has_drop
+        has_drop=$($NEED_SUDO iptables -L INPUT -n 2>/dev/null | grep -cE 'DROP|REJECT' || true)
+        if [[ "$has_drop" -gt 0 ]]; then
+            firewall_found=true
+            info "检测到 iptables 防火墙规则"
+            # 检查端口是否已放行
+            if $NEED_SUDO iptables -L INPUT -n 2>/dev/null | grep -qw "dpt:${port}"; then
+                info "端口 $port 已在 iptables 放行规则中"
+            else
+                info "正在放行端口 $port (tcp)..."
+                $NEED_SUDO iptables -I INPUT -p tcp --dport "$port" -j ACCEPT
+                success "iptables 已放行端口 $port/tcp"
+
+                # 尝试持久化
+                if command_exists iptables-save; then
+                    if [[ -d /etc/iptables ]]; then
+                        $NEED_SUDO sh -c "iptables-save > /etc/iptables/rules.v4" 2>/dev/null || true
+                    elif command_exists netfilter-persistent; then
+                        $NEED_SUDO netfilter-persistent save 2>/dev/null || true
+                    fi
+                    info "iptables 规则已尝试持久化"
+                fi
+            fi
+        fi
+    fi
+
+    if [[ "$firewall_found" == false ]]; then
+        info "未检测到活动的防火墙，无需放行端口"
+    fi
+
+    # ---- 提醒云服务器安全组 ----
+    echo ""
+    warn "如果您使用的是云服务器 (阿里云/腾讯云/AWS 等)"
+    warn "请确保在云控制台的安全组中也放行了端口 ${port}/tcp"
+}
+
+# ==================== 其余工具函数 ====================
+
 load_config() {
     if [[ -f "$KSILLY_CONF" ]]; then
         source "$KSILLY_CONF"
@@ -136,7 +276,6 @@ load_config() {
     fi
 }
 
-# 保存配置
 save_config() {
     cat > "$KSILLY_CONF" <<EOF
 # Ksilly 配置文件 - 请勿手动修改
@@ -146,12 +285,10 @@ KSILLY_GITHUB_PROXY="${GITHUB_PROXY}"
 EOF
 }
 
-# 检查命令是否存在
 command_exists() {
     command -v "$1" &>/dev/null
 }
 
-# 获取sudo前缀
 get_sudo() {
     if [[ "$EUID" -eq 0 ]]; then
         NEED_SUDO=""
@@ -188,9 +325,7 @@ detect_os() {
             ;;
         centos|rhel|rocky|almalinux|fedora)
             PKG_MANAGER="yum"
-            if command_exists dnf; then
-                PKG_MANAGER="dnf"
-            fi
+            command_exists dnf && PKG_MANAGER="dnf"
             info "检测到 RHEL/CentOS 系发行版 ($OS_TYPE)"
             ;;
         arch|manjaro)
@@ -218,20 +353,16 @@ detect_network() {
 
     local china_test=false
 
-    # 方法1: 能快速访问百度但不能访问 Google
     if curl -s --connect-timeout 3 --max-time 5 "https://www.baidu.com" &>/dev/null; then
         if ! curl -s --connect-timeout 3 --max-time 5 "https://www.google.com" &>/dev/null; then
             china_test=true
         fi
     fi
 
-    # 方法2: IP地理位置
     if [[ "$china_test" == false ]]; then
         local country=""
         country=$(curl -s --connect-timeout 5 --max-time 8 "https://ipapi.co/country_code/" 2>/dev/null || true)
-        if [[ "$country" == "CN" ]]; then
-            china_test=true
-        fi
+        [[ "$country" == "CN" ]] && china_test=true
     fi
 
     if [[ "$china_test" == true ]]; then
@@ -301,18 +432,11 @@ install_git() {
         *)      error "不支持的包管理器，请手动安装 git"; exit 1 ;;
     esac
 
-    if command_exists git; then
-        success "Git 安装完成"
-    else
-        error "Git 安装失败"
-        exit 1
-    fi
+    command_exists git && success "Git 安装完成" || { error "Git 安装失败"; exit 1; }
 }
 
 check_node_version() {
-    if ! command_exists node; then
-        return 1
-    fi
+    command_exists node || return 1
     local ver
     ver=$(node -v | sed 's/v//' | cut -d. -f1)
     [[ "$ver" -ge "$MIN_NODE_VERSION" ]]
@@ -320,17 +444,11 @@ check_node_version() {
 
 install_nodejs() {
     if check_node_version; then
-        local node_ver
-        node_ver=$(node -v)
-        info "Node.js 已安装 (版本: $node_ver)，满足最低要求 (v${MIN_NODE_VERSION}+)"
+        info "Node.js 已安装 (版本: $(node -v))，满足最低要求 (v${MIN_NODE_VERSION}+)"
         return 0
     fi
 
-    if command_exists node; then
-        local old_ver
-        old_ver=$(node -v)
-        warn "当前 Node.js 版本 $old_ver 过低，需要 v${MIN_NODE_VERSION}+，将进行升级"
-    fi
+    command_exists node && warn "当前 Node.js 版本 $(node -v) 过低，需要 v${MIN_NODE_VERSION}+，将进行升级"
 
     step "安装 Node.js v20.x..."
 
@@ -340,7 +458,6 @@ install_nodejs() {
         install_nodejs_standard
     fi
 
-    # 刷新 hash 表让 bash 找到新安装的 node
     hash -r 2>/dev/null || true
 
     if check_node_version; then
@@ -372,22 +489,13 @@ install_nodejs_standard() {
             $NEED_SUDO apt-get install -y -qq nodejs
             ;;
         yum|dnf)
-            info "通过 NodeSource 安装 Node.js 20.x..."
             curl -fsSL https://rpm.nodesource.com/setup_20.x | $NEED_SUDO bash -
             $NEED_SUDO $PKG_MANAGER install -y nodejs
             ;;
-        pacman)
-            $NEED_SUDO pacman -S --noconfirm nodejs npm
-            ;;
-        apk)
-            $NEED_SUDO apk add nodejs npm
-            ;;
-        brew)
-            brew install node@20
-            ;;
-        *)
-            install_nodejs_binary
-            ;;
+        pacman) $NEED_SUDO pacman -S --noconfirm nodejs npm ;;
+        apk)    $NEED_SUDO apk add nodejs npm ;;
+        brew)   brew install node@20 ;;
+        *)      install_nodejs_binary ;;
     esac
 }
 
@@ -469,7 +577,6 @@ clone_sillytavern() {
             fi
         else
             error "目录 $INSTALL_DIR 已存在且不是 SillyTavern 目录"
-            error "请选择其他目录或手动删除该目录"
             exit 1
         fi
     fi
@@ -500,22 +607,28 @@ clone_sillytavern() {
             if git clone -b "$branch" --single-branch --depth 1 "$SILLYTAVERN_REPO" "$INSTALL_DIR"; then
                 success "SillyTavern 仓库克隆完成 (直连)"
             else
-                error "克隆失败，请检查网络连接"
-                exit 1
+                error "克隆失败，请检查网络连接"; exit 1
             fi
         else
-            error "克隆失败，请检查网络连接"
-            exit 1
+            error "克隆失败，请检查网络连接"; exit 1
         fi
     fi
+
+    # 修复 YAML 文件的 Windows 换行符
+    step "规范化配置文件..."
+    if command_exists dos2unix; then
+        find "$INSTALL_DIR" -name "*.yaml" -exec dos2unix {} \; 2>/dev/null || true
+    else
+        find "$INSTALL_DIR" -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
+    fi
+    success "配置文件已规范化"
 
     step "安装 npm 依赖..."
     cd "$INSTALL_DIR"
     if npm install --no-audit --no-fund 2>&1 | tail -5; then
         success "npm 依赖安装完成"
     else
-        error "npm 依赖安装失败"
-        exit 1
+        error "npm 依赖安装失败"; exit 1
     fi
     cd - >/dev/null
 
@@ -531,10 +644,11 @@ configure_sillytavern() {
     if [[ ! -f "$config_file" ]]; then
         if [[ -f "$default_file" ]]; then
             cp "$default_file" "$config_file"
+            # 清除可能的 \r
+            sed -i 's/\r$//' "$config_file"
             info "已从 default.yaml 生成 config.yaml"
         else
-            error "未找到 default.yaml，无法生成配置"
-            exit 1
+            error "未找到 default.yaml，无法生成配置"; exit 1
         fi
     fi
 
@@ -550,8 +664,10 @@ configure_sillytavern() {
     echo -e "    允许局域网内其他设备或外网访问"
     echo -e "    关闭则仅本机可访问 (127.0.0.1)"
     echo ""
+    local listen_enabled=false
     if confirm_no_default "是否开启监听 (允许远程访问)?"; then
         sed -i 's/^\( *\)listen:.*/\1listen: true/' "$config_file"
+        listen_enabled=true
         success "已开启监听"
     else
         sed -i 's/^\( *\)listen:.*/\1listen: false/' "$config_file"
@@ -612,6 +728,12 @@ configure_sillytavern() {
         info "基础认证保持关闭"
     fi
 
+    # --- 4. 防火墙 (仅在开启监听时) ---
+    if [[ "$listen_enabled" == true ]]; then
+        echo ""
+        open_firewall_port "$port"
+    fi
+
     echo ""
     success "配置文件已保存到: $config_file"
 }
@@ -657,9 +779,7 @@ setup_service() {
         local node_path
         node_path=$(which node)
 
-        local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
-
-        $NEED_SUDO tee "$service_file" >/dev/null <<EOF
+        $NEED_SUDO tee "/etc/systemd/system/${SERVICE_NAME}.service" >/dev/null <<EOF
 [Unit]
 Description=SillyTavern Server
 Documentation=https://docs.sillytavern.app
@@ -695,14 +815,30 @@ EOF
     fi
 }
 
+# 显示访问地址信息
+show_access_info() {
+    local port
+    port=$(get_port)
+
+    local listen_mode
+    listen_mode=$(get_yaml_val "listen" "$INSTALL_DIR/config.yaml")
+
+    echo ""
+    if [[ "$listen_mode" == "true" ]]; then
+        local ip_addr
+        ip_addr=$(get_local_ip)
+        info "本地访问: http://127.0.0.1:${port}"
+        info "远程访问: http://${ip_addr}:${port}"
+    else
+        info "访问地址: http://127.0.0.1:${port}"
+    fi
+}
+
 start_sillytavern() {
     if ! check_installed; then
         error "SillyTavern 未安装"
         return 1
     fi
-
-    local port
-    port=$(grep -E '^\s*port:' "$INSTALL_DIR/config.yaml" 2>/dev/null | awk '{print $2}' || echo "8000")
 
     if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
         step "通过 systemd 启动 SillyTavern..."
@@ -712,21 +848,13 @@ start_sillytavern() {
 
         if $NEED_SUDO systemctl is-active --quiet "$SERVICE_NAME"; then
             success "SillyTavern 已成功启动!"
-            echo ""
-            local listen_mode
-            listen_mode=$(grep -E '^\s*listen:' "$INSTALL_DIR/config.yaml" 2>/dev/null | awk '{print $2}')
-            if [[ "$listen_mode" == "true" ]]; then
-                local ip_addr
-                ip_addr=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "你的IP")
-                info "本地访问: http://127.0.0.1:${port}"
-                info "远程访问: http://${ip_addr}:${port}"
-            else
-                info "访问地址: http://127.0.0.1:${port}"
-            fi
+            show_access_info
         else
             error "启动失败，查看日志: journalctl -u $SERVICE_NAME -n 20"
         fi
     else
+        local port
+        port=$(get_port)
         step "前台启动 SillyTavern..."
         info "访问地址: http://127.0.0.1:${port}"
         info "按 Ctrl+C 停止运行"
@@ -750,9 +878,7 @@ stop_sillytavern() {
             step "停止 SillyTavern 进程 (PID: $pid)..."
             kill "$pid" 2>/dev/null || true
             sleep 2
-            if kill -0 "$pid" 2>/dev/null; then
-                kill -9 "$pid" 2>/dev/null || true
-            fi
+            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
             success "SillyTavern 已停止"
         else
             info "SillyTavern 未在运行"
@@ -820,15 +946,17 @@ show_status() {
         echo ""
         info "当前配置:"
         local listen_val whitelist_val auth_val port_val
-        listen_val=$(grep -E '^\s*listen:' "$INSTALL_DIR/config.yaml" | awk '{print $2}')
-        whitelist_val=$(grep -E '^\s*whitelistMode:' "$INSTALL_DIR/config.yaml" | awk '{print $2}')
-        auth_val=$(grep -E '^\s*basicAuthMode:' "$INSTALL_DIR/config.yaml" | awk '{print $2}')
-        port_val=$(grep -E '^\s*port:' "$INSTALL_DIR/config.yaml" | awk '{print $2}')
+        listen_val=$(get_yaml_val "listen" "$INSTALL_DIR/config.yaml")
+        whitelist_val=$(get_yaml_val "whitelistMode" "$INSTALL_DIR/config.yaml")
+        auth_val=$(get_yaml_val "basicAuthMode" "$INSTALL_DIR/config.yaml")
+        port_val=$(get_port)
 
         echo -e "    监听所有接口: $(format_bool "$listen_val")"
         echo -e "    白名单模式:   $(format_bool "$whitelist_val")"
         echo -e "    基础认证:     $(format_bool "$auth_val")"
-        echo -e "    端口:         ${CYAN}${port_val:-8000}${NC}"
+        echo -e "    端口:         ${CYAN}${port_val}${NC}"
+
+        show_access_info
     fi
 }
 
@@ -861,9 +989,7 @@ update_sillytavern() {
     info "拉取最新代码..."
 
     if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
-        local proxied_url
-        proxied_url=$(get_github_url "$SILLYTAVERN_REPO")
-        git remote set-url origin "$proxied_url"
+        git remote set-url origin "$(get_github_url "$SILLYTAVERN_REPO")"
     fi
 
     if git pull --ff-only; then
@@ -877,9 +1003,10 @@ update_sillytavern() {
         success "代码强制更新完成"
     fi
 
-    if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
-        git remote set-url origin "$SILLYTAVERN_REPO"
-    fi
+    [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]] && git remote set-url origin "$SILLYTAVERN_REPO"
+
+    # 规范化换行符
+    find . -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
 
     info "更新 npm 依赖..."
     npm install --no-audit --no-fund 2>&1 | tail -3
@@ -912,18 +1039,16 @@ uninstall_sillytavern() {
     warn "安装目录: $INSTALL_DIR"
     echo ""
 
-    if ! confirm_no_default "确定要卸载 SillyTavern 吗? 此操作不可恢复!"; then
-        info "已取消卸载"
-        return 0
-    fi
-
+    confirm_no_default "确定要卸载 SillyTavern 吗? 此操作不可恢复!" || { info "已取消卸载"; return 0; }
     echo ""
-    if ! confirm_no_default "再次确认: 真的要删除所有数据吗?"; then
-        info "已取消卸载"
-        return 0
-    fi
+    confirm_no_default "再次确认: 真的要删除所有数据吗?" || { info "已取消卸载"; return 0; }
 
     stop_sillytavern
+
+    # 移除防火墙规则
+    local port
+    port=$(get_port)
+    remove_firewall_port "$port"
 
     if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
         step "移除 systemd 服务..."
@@ -969,6 +1094,31 @@ uninstall_sillytavern() {
     fi
 }
 
+# 移除防火墙端口 (卸载时调用)
+remove_firewall_port() {
+    local port="$1"
+    get_sudo
+
+    if command_exists ufw; then
+        local ufw_status
+        ufw_status=$($NEED_SUDO ufw status 2>/dev/null | head -1 || true)
+        if echo "$ufw_status" | grep -qi "active"; then
+            $NEED_SUDO ufw delete allow "$port/tcp" 2>/dev/null || true
+            info "已从 UFW 移除端口 $port 规则"
+        fi
+    fi
+
+    if command_exists firewall-cmd; then
+        local fwd_state
+        fwd_state=$($NEED_SUDO firewall-cmd --state 2>/dev/null || true)
+        if [[ "$fwd_state" == "running" ]]; then
+            $NEED_SUDO firewall-cmd --permanent --remove-port="${port}/tcp" 2>/dev/null || true
+            $NEED_SUDO firewall-cmd --reload 2>/dev/null || true
+            info "已从 firewalld 移除端口 $port 规则"
+        fi
+    fi
+}
+
 check_installed() {
     load_config
     if [[ -d "$INSTALL_DIR" && -f "$INSTALL_DIR/server.js" ]]; then
@@ -1003,13 +1153,13 @@ modify_config_menu() {
         echo ""
 
         local listen_val whitelist_val auth_val port_val
-        listen_val=$(grep -E '^\s*listen:' "$config_file" | awk '{print $2}')
-        whitelist_val=$(grep -E '^\s*whitelistMode:' "$config_file" | awk '{print $2}')
-        auth_val=$(grep -E '^\s*basicAuthMode:' "$config_file" | awk '{print $2}')
-        port_val=$(grep -E '^\s*port:' "$config_file" | awk '{print $2}')
+        listen_val=$(get_yaml_val "listen" "$config_file")
+        whitelist_val=$(get_yaml_val "whitelistMode" "$config_file")
+        auth_val=$(get_yaml_val "basicAuthMode" "$config_file")
+        port_val=$(get_port)
 
         echo -e "  当前配置:"
-        echo -e "    监听: $(format_bool "$listen_val")  |  白名单: $(format_bool "$whitelist_val")  |  认证: $(format_bool "$auth_val")  |  端口: ${CYAN}${port_val:-8000}${NC}"
+        echo -e "    监听: $(format_bool "$listen_val")  |  白名单: $(format_bool "$whitelist_val")  |  认证: $(format_bool "$auth_val")  |  端口: ${CYAN}${port_val}${NC}"
         echo ""
         divider
         echo ""
@@ -1019,6 +1169,7 @@ modify_config_menu() {
         echo -e "  ${GREEN}4)${NC} 修改端口             (port)"
         echo -e "  ${GREEN}5)${NC} 编辑完整配置文件     (使用 nano/vi)"
         echo -e "  ${GREEN}6)${NC} 重置为默认配置"
+        echo -e "  ${GREEN}7)${NC} 防火墙放行管理"
         echo ""
         echo -e "  ${RED}0)${NC} 返回主菜单"
         echo ""
@@ -1033,6 +1184,10 @@ modify_config_menu() {
                 if confirm_no_default "是否开启监听 (允许远程访问)?"; then
                     sed -i 's/^\( *\)listen:.*/\1listen: true/' "$config_file"
                     success "已开启监听"
+                    echo ""
+                    local current_port
+                    current_port=$(get_port)
+                    open_firewall_port "$current_port"
                 else
                     sed -i 's/^\( *\)listen:.*/\1listen: false/' "$config_file"
                     success "已关闭监听"
@@ -1073,26 +1228,37 @@ modify_config_menu() {
             4)
                 echo ""
                 local new_port
-                new_port=$(read_input "请输入新端口号" "${port_val:-8000}")
+                new_port=$(read_input "请输入新端口号" "${port_val}")
                 if [[ "$new_port" =~ ^[0-9]+$ ]] && [ "$new_port" -ge 1 ] && [ "$new_port" -le 65535 ]; then
                     sed -i "s/^\( *\)port:.*/\1port: ${new_port}/" "$config_file"
                     success "端口已修改为: $new_port"
+                    # 如果开启了监听，自动放行新端口
+                    local cur_listen
+                    cur_listen=$(get_yaml_val "listen" "$config_file")
+                    if [[ "$cur_listen" == "true" ]]; then
+                        open_firewall_port "$new_port"
+                    fi
                 else
                     error "无效的端口号: $new_port"
                 fi
                 ;;
             5)
                 local editor="nano"
-                if ! command_exists nano; then
-                    editor="vi"
-                fi
+                command_exists nano || editor="vi"
                 $editor "$config_file"
                 ;;
             6)
                 if confirm_no_default "确定要重置配置为默认值吗?"; then
                     cp "$INSTALL_DIR/default.yaml" "$config_file"
+                    sed -i 's/\r$//' "$config_file"
                     success "配置已重置为默认值"
                 fi
+                ;;
+            7)
+                echo ""
+                local fw_port
+                fw_port=$(get_port)
+                open_firewall_port "$fw_port"
                 ;;
             0)
                 return 0
@@ -1161,20 +1327,7 @@ full_install() {
     echo ""
     info "安装目录: $INSTALL_DIR"
 
-    local port
-    port=$(grep -E '^\s*port:' "$INSTALL_DIR/config.yaml" 2>/dev/null | awk '{print $2}' || echo "8000")
-
-    local listen_mode
-    listen_mode=$(grep -E '^\s*listen:' "$INSTALL_DIR/config.yaml" 2>/dev/null | awk '{print $2}')
-
-    if [[ "$listen_mode" == "true" ]]; then
-        local ip_addr
-        ip_addr=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "你的IP")
-        info "本地访问: http://127.0.0.1:${port}"
-        info "远程访问: http://${ip_addr}:${port}"
-    else
-        info "访问地址: http://127.0.0.1:${port}"
-    fi
+    show_access_info
 
     echo ""
     divider
@@ -1204,9 +1357,9 @@ main_menu() {
 
         if check_installed; then
             local version=""
-            if [[ -f "$INSTALL_DIR/package.json" ]]; then
+            [[ -f "$INSTALL_DIR/package.json" ]] && \
                 version=$(grep '"version"' "$INSTALL_DIR/package.json" | head -1 | sed 's/.*"version".*"\(.*\)".*/\1/')
-            fi
+
             local status_icon="${RED}●${NC}"
             if command_exists systemctl && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
                 status_icon="${GREEN}●${NC}"
@@ -1249,17 +1402,14 @@ main_menu() {
             1)
                 if check_installed; then
                     warn "SillyTavern 已安装在 $INSTALL_DIR"
-                    if ! confirm_no_default "是否重新安装?"; then
-                        continue
-                    fi
+                    confirm_no_default "是否重新安装?" || continue
                 fi
                 full_install
                 echo ""
                 read -rp "  按 Enter 继续..."
                 ;;
             2)
-                detect_os
-                detect_network
+                detect_os; detect_network
                 update_sillytavern
                 echo ""
                 read -rp "  按 Enter 继续..."
@@ -1340,22 +1490,14 @@ main() {
     load_config
 
     case "${1:-}" in
-        install)
-            detect_os; detect_network; full_install ;;
-        update)
-            detect_os; detect_network; load_config; update_sillytavern ;;
-        start)
-            start_sillytavern ;;
-        stop)
-            stop_sillytavern ;;
-        restart)
-            stop_sillytavern; sleep 1; start_sillytavern ;;
-        status)
-            show_status ;;
-        uninstall)
-            detect_os; uninstall_sillytavern ;;
-        "")
-            main_menu ;;
+        install)   detect_os; detect_network; full_install ;;
+        update)    detect_os; detect_network; load_config; update_sillytavern ;;
+        start)     start_sillytavern ;;
+        stop)      stop_sillytavern ;;
+        restart)   stop_sillytavern; sleep 1; start_sillytavern ;;
+        status)    show_status ;;
+        uninstall) detect_os; uninstall_sillytavern ;;
+        "")        main_menu ;;
         *)
             echo "用法: $0 {install|update|start|stop|restart|status|uninstall}"
             echo "  不带参数则进入交互式菜单"
