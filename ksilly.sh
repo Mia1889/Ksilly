@@ -1,10 +1,10 @@
 #!/bin/bash
 #
 #  ██╗  ██╗███████╗██╗██╗     ██╗  ██╗   ██╗
-#  ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝
-#  █████╔╝ ███████╗██║██║     ██║   ╚████╔╝
-#  ██╔═██╗ ╚════██║██║██║     ██║    ╚██╔╝
-#  ██║  ██╗███████║██║███████╗███████╗██║
+#  ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝       ╱|、
+#  █████╔╝ ███████╗██║██║     ██║   ╚████╔╝       (˚ˎ 。7
+#  ██╔═██╗ ╚════██║██║██║     ██║    ╚██╔╝         |、˜〵
+#  ██║  ██╗███████║██║███████╗███████╗██║           じしˍ,)ノ
 #  ╚═╝  ╚═╝╚══════╝╚═╝╚══════╝╚══════╝╚═╝
 #
 #  Ksilly - 简单 SillyTavern 部署脚本
@@ -14,49 +14,49 @@
 #
 
 # ==================== 全局常量 ====================
-SCRIPT_VERSION="2.2.3"
-KSILLY_CONF="$HOME/.ksilly.conf"
-DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
-SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
-SCRIPT_RAW_URL="https://raw.githubusercontent.com/Mia1889/Ksilly/main/ksilly.sh"
-SERVICE_NAME="sillytavern"
-MIN_NODE_VERSION=18
-GITHUB_PROXIES=(
+readonly SCRIPT_VERSION="2.2.3"
+readonly KSILLY_CONF="$HOME/.ksilly.conf"
+readonly DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
+readonly SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
+readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/Mia1889/Ksilly/main/ksilly.sh"
+readonly SERVICE_NAME="sillytavern"
+readonly MIN_NODE_VERSION=18
+readonly GITHUB_PROXIES=(
     "https://ghfast.top/"
     "https://gh-proxy.com/"
     "https://mirror.ghproxy.com/"
 )
 
 # ==================== 插件定义 ====================
-PLUGIN_DIR_NAME="public/scripts/extensions/third-party"
+readonly PLUGIN_DIR_NAME="public/scripts/extensions/third-party"
 
-PLUGIN_1_NAME="酒馆助手 (JS-Slash-Runner)"
-PLUGIN_1_FOLDER="JS-Slash-Runner"
-PLUGIN_1_REPO_INTL="https://github.com/N0VI028/JS-Slash-Runner.git"
-PLUGIN_1_REPO_CN="https://gitlab.com/novi028/JS-Slash-Runner"
+readonly PLUGIN_1_NAME="酒馆助手 (JS-Slash-Runner)"
+readonly PLUGIN_1_FOLDER="JS-Slash-Runner"
+readonly PLUGIN_1_REPO_INTL="https://github.com/N0VI028/JS-Slash-Runner.git"
+readonly PLUGIN_1_REPO_CN="https://gitlab.com/novi028/JS-Slash-Runner"
 
-PLUGIN_2_NAME="提示词模板 (ST-Prompt-Template)"
-PLUGIN_2_FOLDER="ST-Prompt-Template"
-PLUGIN_2_REPO_INTL="https://github.com/zonde306/ST-Prompt-Template.git"
-PLUGIN_2_REPO_CN="https://codeberg.org/zonde306/ST-Prompt-Template.git"
+readonly PLUGIN_2_NAME="提示词模板 (ST-Prompt-Template)"
+readonly PLUGIN_2_FOLDER="ST-Prompt-Template"
+readonly PLUGIN_2_REPO_INTL="https://github.com/zonde306/ST-Prompt-Template.git"
+readonly PLUGIN_2_REPO_CN="https://codeberg.org/zonde306/ST-Prompt-Template.git"
 
 # ==================== Caddy / HTTPS 常量 ====================
-CADDYFILE_PATH="/etc/caddy/Caddyfile"
-CADDY_SERVICE="caddy"
-CADDY_CERT_DIR="/etc/caddy/certs"
-CADDY_AUTOSAVE="/var/lib/caddy/.config/caddy/autosave.json"
+readonly CADDYFILE_PATH="/etc/caddy/Caddyfile"
+readonly CADDY_SERVICE="caddy"
+readonly CADDY_CERT_DIR="/etc/caddy/certs"
+readonly CADDY_AUTOSAVE="/var/lib/caddy/.config/caddy/autosave.json"
 
 # ==================== 颜色定义 ====================
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-PINK='\033[38;5;213m'
-BOLD='\033[1m'
-DIM='\033[2m'
-NC='\033[0m'
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly PURPLE='\033[0;35m'
+readonly CYAN='\033[0;36m'
+readonly PINK='\033[38;5;213m'
+readonly BOLD='\033[1m'
+readonly DIM='\033[2m'
+readonly NC='\033[0m'
 
 # ==================== 全局变量 ====================
 IS_CHINA=false
@@ -81,6 +81,7 @@ spin() {
     shift
     local tmplog
     tmplog=$(mktemp)
+    trap 'rm -f "$tmplog"' RETURN
 
     "$@" > "$tmplog" 2>&1 &
     local cmd_pid=$!
@@ -109,7 +110,6 @@ spin() {
         done
     fi
 
-    rm -f "$tmplog"
     return $ret
 }
 
@@ -118,6 +118,7 @@ spin_cmd() {
     local cmd="$2"
     local tmplog
     tmplog=$(mktemp)
+    trap 'rm -f "$tmplog"' RETURN
 
     bash -c "$cmd" > "$tmplog" 2>&1 &
     local cmd_pid=$!
@@ -146,7 +147,6 @@ spin_cmd() {
         done
     fi
 
-    rm -f "$tmplog"
     return $ret
 }
 
@@ -157,16 +157,14 @@ trap 'printf "\r\033[K"; tput cnorm 2>/dev/null; echo ""; warn "哼~杂鱼按 Ct
 
 print_banner() {
     clear
-    echo -e "${PINK}"
-    cat << 'BANNER'
-  ██╗  ██╗███████╗██╗██╗     ██╗  ██╗   ██╗
-  ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝
-  █████╔╝ ███████╗██║██║     ██║   ╚████╔╝
-  ██╔═██╗ ╚════██║██║██║     ██║    ╚██╔╝
-  ██║  ██╗███████║██║███████╗███████╗██║
-  ╚═╝  ╚═╝╚══════╝╚═╝╚══════╝╚══════╝╚═╝
-BANNER
-    echo -e "${NC}"
+    echo ""
+    echo -e "${PINK}  ██╗  ██╗███████╗██╗██╗     ██╗  ██╗   ██╗${NC}"
+    echo -e "${PINK}  ██║ ██╔╝██╔════╝██║██║     ██║  ╚██╗ ██╔╝${NC}       ${PINK}╱|、${NC}"
+    echo -e "${PINK}  █████╔╝ ███████╗██║██║     ██║   ╚████╔╝${NC}       ${PINK}(˚ˎ 。7${NC}"
+    echo -e "${PINK}  ██╔═██╗ ╚════██║██║██║     ██║    ╚██╔╝${NC}         ${PINK}|、˜〵${NC}"
+    echo -e "${PINK}  ██║  ██╗███████║██║███████╗███████╗██║${NC}           ${PINK}じしˍ,)ノ${NC}"
+    echo -e "${PINK}  ╚═╝  ╚═╝╚══════╝╚═╝╚══════╝╚══════╝╚═╝${NC}"
+    echo ""
     echo -e "  ${BOLD}才不是为杂鱼准备的部署脚本呢${NC} ${PINK}♡${NC} ${DIM}v${SCRIPT_VERSION}${NC}"
     echo -e "  ${DIM}by Mia1889 · github.com/Mia1889/Ksilly${NC}"
     divider
@@ -185,7 +183,7 @@ step() {
 }
 
 divider() {
-    echo -e "  ${DIM}──────────────────────────────────────────${NC}"
+    echo -e "  ${PINK}♡${NC}${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}${PINK}♡${NC}"
 }
 
 # ==================== 输入函数 ====================
@@ -1076,8 +1074,6 @@ install_caddy() {
     esac
 
     if command_exists caddy; then
-        # apt/yum 等安装后 Caddy 会自动启动并加载默认配置
-        # 先停掉，等后面写好 Caddyfile 再用 caddy_start 启动
         if command_exists systemctl; then
             $NEED_SUDO systemctl stop "$CADDY_SERVICE" &>/dev/null
             $NEED_SUDO systemctl disable "$CADDY_SERVICE" &>/dev/null
@@ -1107,12 +1103,10 @@ caddy_start() {
     [[ "$IS_TERMUX" == true ]] && return 1
     get_sudo || return 1
 
-    # 清除 Caddy 缓存配置，防止旧配置残留导致不监听 443
     $NEED_SUDO rm -f "$CADDY_AUTOSAVE" 2>/dev/null
     $NEED_SUDO rm -f /root/.config/caddy/autosave.json 2>/dev/null
     $NEED_SUDO rm -f /home/caddy/.config/caddy/autosave.json 2>/dev/null
 
-    # 验证 Caddyfile 语法
     if command_exists caddy && [[ -f "$CADDYFILE_PATH" ]]; then
         if ! $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile &>/dev/null; then
             error "Caddyfile 配置有语法错误~♡"
@@ -1124,12 +1118,10 @@ caddy_start() {
     fi
 
     $NEED_SUDO systemctl enable "$CADDY_SERVICE" &>/dev/null
-    # 始终用 restart 而非 start，确保加载最新配置
     $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
     sleep 2
 
     if is_caddy_running; then
-        # 验证 443 端口是否真的在监听
         if ss -tlnp 2>/dev/null | grep -q ':443\b'; then
             success "Caddy 跑起来了~443 端口已监听♡"
             return 0
@@ -1159,12 +1151,11 @@ caddy_stop() {
 caddy_restart() {
     [[ "$IS_TERMUX" == true ]] && return 1
     get_sudo || return 1
-    # 清除缓存配置再重启
+
     $NEED_SUDO rm -f "$CADDY_AUTOSAVE" 2>/dev/null
     $NEED_SUDO rm -f /root/.config/caddy/autosave.json 2>/dev/null
     $NEED_SUDO rm -f /home/caddy/.config/caddy/autosave.json 2>/dev/null
 
-    # 验证配置
     if command_exists caddy && [[ -f "$CADDYFILE_PATH" ]]; then
         if ! $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile &>/dev/null; then
             error "Caddyfile 配置有语法错误~♡"
@@ -1227,7 +1218,6 @@ ${domain} {
 CADDYEOF
         info "Caddyfile 生成好了~域名: ${domain} ♡"
     else
-        # 使用 :443 而非 https:// 确保 Caddy 明确监听 443 端口
         $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << CADDYEOF
 # Ksilly 生成 - 自签证书 HTTPS
 :443 {
@@ -1238,7 +1228,6 @@ CADDYEOF
         info "Caddyfile 生成好了~自签证书模式 ♡"
     fi
 
-    # 生成后验证语法
     if command_exists caddy; then
         if ! $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile &>/dev/null; then
             error "Caddyfile 语法错误~♡"
@@ -1337,7 +1326,6 @@ setup_https() {
             echo ""
             warn "云服务器记得在安全组放行 80 和 443 端口♡"
         else
-            # Caddy 启动失败，回滚 listen 设置
             set_yaml_val "listen" "true" "$config_file"
             warn "Caddy 启动失败~已回滚监听设置♡"
             return 1
@@ -1388,7 +1376,6 @@ setup_https() {
             echo ""
             warn "云服务器记得在安全组放行 443 端口♡"
         else
-            # Caddy 启动失败，回滚 listen 设置
             set_yaml_val "listen" "true" "$config_file"
             warn "Caddy 启动失败~已回滚监听设置♡"
             return 1
@@ -2515,9 +2502,7 @@ uninstall_sillytavern() {
     warn "要卸载 SillyTavern 了哦~杂鱼真的舍得吗♡"
     echo -e "    安装目录: ${DIM}${INSTALL_DIR}${NC}"
 
-    local has_plugins=false
     if is_plugin_installed "$PLUGIN_1_FOLDER" || is_plugin_installed "$PLUGIN_2_FOLDER"; then
-        has_plugins=true
         echo ""
         echo -e "    ${YELLOW}已安装的插件也会一起删掉哦~♡${NC}"
         is_plugin_installed "$PLUGIN_1_FOLDER" && echo -e "      • ${PLUGIN_1_NAME}"
@@ -3169,7 +3154,10 @@ main_menu() {
                 ;;
             0)
                 echo ""
-                info "哼~走了就走了~才不会想你呢杂鱼♡ 👋"
+                echo -e "  ${PINK}╱|、${NC}"
+                echo -e "  ${PINK}(˚ˎ 。7${NC}  ${DIM}哼~走了就走了~才不会想你呢杂鱼♡ 👋${NC}"
+                echo -e "  ${PINK} |、˜〵${NC}"
+                echo -e "  ${PINK} じしˍ,)ノ${NC}"
                 echo ""
                 exit 0
                 ;;
