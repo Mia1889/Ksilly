@@ -10,11 +10,11 @@
 #  Ksilly - 简单 SillyTavern 部署脚本
 #  作者: Mia1889
 #  仓库: https://github.com/Mia1889/Ksilly
-#  版本: 2.2.2
+#  版本: 2.2.3
 #
 
 # ==================== 全局常量 ====================
-SCRIPT_VERSION="2.2.2"
+SCRIPT_VERSION="2.2.3"
 KSILLY_CONF="$HOME/.ksilly.conf"
 DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
 SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
@@ -987,6 +987,7 @@ generate_self_signed_cert() {
     step "生成自签证书~杂鱼什么都不用管♡"
 
     $NEED_SUDO mkdir -p "$CADDY_CERT_DIR"
+    $NEED_SUDO chmod 755 "$CADDY_CERT_DIR"
 
     local local_ip public_ip san_entries
     local_ip=$(get_local_ip)
@@ -1008,7 +1009,7 @@ generate_self_signed_cert() {
         2>/dev/null; then
 
         if id caddy &>/dev/null; then
-            $NEED_SUDO chown caddy:caddy "$CADDY_CERT_DIR/key.pem" "$CADDY_CERT_DIR/cert.pem"
+            $NEED_SUDO chown -R caddy:caddy "$CADDY_CERT_DIR"
         fi
         $NEED_SUDO chmod 600 "$CADDY_CERT_DIR/key.pem"
         $NEED_SUDO chmod 644 "$CADDY_CERT_DIR/cert.pem"
@@ -1075,6 +1076,12 @@ install_caddy() {
     esac
 
     if command_exists caddy; then
+        # apt/yum 等安装后 Caddy 会自动启动并加载默认配置
+        # 先停掉，等后面写好 Caddyfile 再用 caddy_start 启动
+        if command_exists systemctl; then
+            $NEED_SUDO systemctl stop "$CADDY_SERVICE" &>/dev/null
+            $NEED_SUDO systemctl disable "$CADDY_SERVICE" &>/dev/null
+        fi
         success "Caddy 装好了~♡"
         return 0
     else
@@ -1099,16 +1106,45 @@ is_caddy_running() {
 caddy_start() {
     [[ "$IS_TERMUX" == true ]] && return 1
     get_sudo || return 1
+
     # 清除 Caddy 缓存配置，防止旧配置残留导致不监听 443
     $NEED_SUDO rm -f "$CADDY_AUTOSAVE" 2>/dev/null
+    $NEED_SUDO rm -f /root/.config/caddy/autosave.json 2>/dev/null
+    $NEED_SUDO rm -f /home/caddy/.config/caddy/autosave.json 2>/dev/null
+
+    # 验证 Caddyfile 语法
+    if command_exists caddy && [[ -f "$CADDYFILE_PATH" ]]; then
+        if ! $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile &>/dev/null; then
+            error "Caddyfile 配置有语法错误~♡"
+            $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile 2>&1 | tail -5 | while IFS= read -r line; do
+                echo -e "    ${DIM}${line}${NC}"
+            done
+            return 1
+        fi
+    fi
+
     $NEED_SUDO systemctl enable "$CADDY_SERVICE" &>/dev/null
-    $NEED_SUDO systemctl start "$CADDY_SERVICE" &>/dev/null
+    # 始终用 restart 而非 start，确保加载最新配置
+    $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
     sleep 2
+
     if is_caddy_running; then
-        success "Caddy 跑起来了~♡"
-        return 0
+        # 验证 443 端口是否真的在监听
+        if ss -tlnp 2>/dev/null | grep -q ':443\b'; then
+            success "Caddy 跑起来了~443 端口已监听♡"
+            return 0
+        else
+            warn "Caddy 在跑但 443 端口没监听~检查配置♡"
+            $NEED_SUDO journalctl -u "$CADDY_SERVICE" --no-pager -n 10 2>/dev/null | while IFS= read -r line; do
+                echo -e "    ${DIM}${line}${NC}"
+            done
+            return 1
+        fi
     else
-        error "Caddy 启动失败~用 'journalctl -u caddy' 看看♡"
+        error "Caddy 启动失败~♡"
+        $NEED_SUDO journalctl -u "$CADDY_SERVICE" --no-pager -n 15 2>/dev/null | while IFS= read -r line; do
+            echo -e "    ${DIM}${line}${NC}"
+        done
         return 1
     fi
 }
@@ -1125,13 +1161,35 @@ caddy_restart() {
     get_sudo || return 1
     # 清除缓存配置再重启
     $NEED_SUDO rm -f "$CADDY_AUTOSAVE" 2>/dev/null
+    $NEED_SUDO rm -f /root/.config/caddy/autosave.json 2>/dev/null
+    $NEED_SUDO rm -f /home/caddy/.config/caddy/autosave.json 2>/dev/null
+
+    # 验证配置
+    if command_exists caddy && [[ -f "$CADDYFILE_PATH" ]]; then
+        if ! $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile &>/dev/null; then
+            error "Caddyfile 配置有语法错误~♡"
+            $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile 2>&1 | tail -5 | while IFS= read -r line; do
+                echo -e "    ${DIM}${line}${NC}"
+            done
+            return 1
+        fi
+    fi
+
     $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
     sleep 2
     if is_caddy_running; then
-        info "Caddy 重启好了~♡"
-        return 0
+        if ss -tlnp 2>/dev/null | grep -q ':443\b'; then
+            info "Caddy 重启好了~443 端口已监听♡"
+            return 0
+        else
+            warn "Caddy 在跑但 443 端口没监听~♡"
+            return 1
+        fi
     else
         error "Caddy 重启失败~♡"
+        $NEED_SUDO journalctl -u "$CADDY_SERVICE" --no-pager -n 10 2>/dev/null | while IFS= read -r line; do
+            echo -e "    ${DIM}${line}${NC}"
+        done
         return 1
     fi
 }
@@ -1140,6 +1198,8 @@ caddy_reload() {
     [[ "$IS_TERMUX" == true ]] && return 1
     get_sudo || return 1
     $NEED_SUDO rm -f "$CADDY_AUTOSAVE" 2>/dev/null
+    $NEED_SUDO rm -f /root/.config/caddy/autosave.json 2>/dev/null
+    $NEED_SUDO rm -f /home/caddy/.config/caddy/autosave.json 2>/dev/null
     $NEED_SUDO systemctl reload "$CADDY_SERVICE" &>/dev/null 2>&1 || \
         $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
     sleep 1
@@ -1167,15 +1227,27 @@ ${domain} {
 CADDYEOF
         info "Caddyfile 生成好了~域名: ${domain} ♡"
     else
-        # 自签证书：用 https:// 强制 Caddy 走 TLS
+        # 使用 :443 而非 https:// 确保 Caddy 明确监听 443 端口
         $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << CADDYEOF
 # Ksilly 生成 - 自签证书 HTTPS
-https:// {
+:443 {
 	tls ${CADDY_CERT_DIR}/cert.pem ${CADDY_CERT_DIR}/key.pem
 	reverse_proxy localhost:${port}
 }
 CADDYEOF
         info "Caddyfile 生成好了~自签证书模式 ♡"
+    fi
+
+    # 生成后验证语法
+    if command_exists caddy; then
+        if ! $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile &>/dev/null; then
+            error "Caddyfile 语法错误~♡"
+            $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile 2>&1 | tail -5 | while IFS= read -r line; do
+                echo -e "    ${DIM}${line}${NC}"
+            done
+            return 1
+        fi
+        info "Caddyfile 语法验证通过~♡"
     fi
 }
 
@@ -1252,19 +1324,24 @@ setup_https() {
 
         echo ""
         step "启动 Caddy~♡"
-        caddy_start
+        if caddy_start; then
+            CADDY_HTTPS_ENABLED=true
+            save_config
 
-        CADDY_HTTPS_ENABLED=true
-        save_config
-
-        echo ""
-        success "HTTPS 配好了~♡"
-        echo -e "  ${CYAN}https://${domain}${NC}"
-        echo ""
-        echo -e "  ${DIM}Caddy 会自动申请 Let's Encrypt 证书~${NC}"
-        echo -e "  ${DIM}首次访问可能需要几秒钟等证书签发哦♡${NC}"
-        echo ""
-        warn "云服务器记得在安全组放行 80 和 443 端口♡"
+            echo ""
+            success "HTTPS 配好了~♡"
+            echo -e "  ${CYAN}https://${domain}${NC}"
+            echo ""
+            echo -e "  ${DIM}Caddy 会自动申请 Let's Encrypt 证书~${NC}"
+            echo -e "  ${DIM}首次访问可能需要几秒钟等证书签发哦♡${NC}"
+            echo ""
+            warn "云服务器记得在安全组放行 80 和 443 端口♡"
+        else
+            # Caddy 启动失败，回滚 listen 设置
+            set_yaml_val "listen" "true" "$config_file"
+            warn "Caddy 启动失败~已回滚监听设置♡"
+            return 1
+        fi
 
     else
         echo ""
@@ -1292,25 +1369,30 @@ setup_https() {
 
         echo ""
         step "启动 Caddy~♡"
-        caddy_start
+        if caddy_start; then
+            CADDY_HTTPS_ENABLED=true
+            save_config
 
-        CADDY_HTTPS_ENABLED=true
-        save_config
-
-        echo ""
-        success "HTTPS 配好了~(自签证书) ♡"
-        local public_ip
-        public_ip=$(get_public_ip)
-        if [[ -n "$public_ip" ]]; then
-            echo -e "  ${CYAN}https://${public_ip}${NC}"
+            echo ""
+            success "HTTPS 配好了~(自签证书) ♡"
+            local public_ip
+            public_ip=$(get_public_ip)
+            if [[ -n "$public_ip" ]]; then
+                echo -e "  ${CYAN}https://${public_ip}${NC}"
+            fi
+            echo ""
+            echo -e "  ${YELLOW}⚠ 首次打开会看到「您的连接不是私密连接」之类的警告${NC}"
+            echo -e "  ${DIM}  Chrome: 点「高级」→「继续前往」${NC}"
+            echo -e "  ${DIM}  Firefox: 点「高级」→「接受风险并继续」${NC}"
+            echo -e "  ${DIM}  这是正常的~数据仍然是加密传输的哦♡${NC}"
+            echo ""
+            warn "云服务器记得在安全组放行 443 端口♡"
+        else
+            # Caddy 启动失败，回滚 listen 设置
+            set_yaml_val "listen" "true" "$config_file"
+            warn "Caddy 启动失败~已回滚监听设置♡"
+            return 1
         fi
-        echo ""
-        echo -e "  ${YELLOW}⚠ 首次打开会看到「您的连接不是私密连接」之类的警告${NC}"
-        echo -e "  ${DIM}  Chrome: 点「高级」→「继续前往」${NC}"
-        echo -e "  ${DIM}  Firefox: 点「高级」→「接受风险并继续」${NC}"
-        echo -e "  ${DIM}  这是正常的~数据仍然是加密传输的哦♡${NC}"
-        echo ""
-        warn "云服务器记得在安全组放行 443 端口♡"
     fi
 }
 
@@ -1415,6 +1497,11 @@ https_status() {
         echo -e "    Caddy          ${GREEN}已安装${NC} ($(caddy version 2>/dev/null | awk '{print $1}'))"
         if is_caddy_running; then
             echo -e "    Caddy 状态     ${GREEN}● 运行中${NC}"
+            if ss -tlnp 2>/dev/null | grep -q ':443\b'; then
+                echo -e "    443 端口       ${GREEN}● 监听中${NC}"
+            else
+                echo -e "    443 端口       ${RED}● 未监听${NC}"
+            fi
         else
             echo -e "    Caddy 状态     ${RED}● 已停止${NC}"
         fi
@@ -2231,6 +2318,11 @@ show_status() {
         if command_exists caddy; then
             if is_caddy_running; then
                 echo -e "    Caddy      ${GREEN}● 运行中${NC}"
+                if ss -tlnp 2>/dev/null | grep -q ':443\b'; then
+                    echo -e "    443 端口   ${GREEN}● 监听中${NC}"
+                else
+                    echo -e "    443 端口   ${RED}● 未监听${NC}"
+                fi
             else
                 echo -e "    Caddy      ${RED}● 已停止${NC}"
             fi
