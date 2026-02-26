@@ -10,13 +10,13 @@
 #  Ksilly - 简单 SillyTavern 部署脚本
 #  作者: Mia1889
 #  仓库: https://github.com/Mia1889/Ksilly
-#  版本: 1.0.0
+#  版本: 1.0.1
 #
 
 set -euo pipefail
 
 # ==================== 全局常量 ====================
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.1"
 KSILLY_CONF="$HOME/.ksilly.conf"
 DEFAULT_INSTALL_DIR="$HOME/SillyTavern"
 SILLYTAVERN_REPO="https://github.com/SillyTavern/SillyTavern.git"
@@ -65,25 +65,11 @@ print_banner() {
     echo ""
 }
 
-info() {
-    echo -e "  ${GREEN}[信息]${NC} $1"
-}
-
-warn() {
-    echo -e "  ${YELLOW}[警告]${NC} $1"
-}
-
-error() {
-    echo -e "  ${RED}[错误]${NC} $1"
-}
-
-ask() {
-    echo -e "  ${BLUE}[询问]${NC} $1"
-}
-
-success() {
-    echo -e "  ${GREEN}[完成]${NC} $1"
-}
+info()    { echo -e "  ${GREEN}[信息]${NC} $1"; }
+warn()    { echo -e "  ${YELLOW}[警告]${NC} $1"; }
+error()   { echo -e "  ${RED}[错误]${NC} $1"; }
+ask()     { echo -e "  ${BLUE}[询问]${NC} $1"; }
+success() { echo -e "  ${GREEN}[完成]${NC} $1"; }
 
 step() {
     echo -e "\n  ${CYAN}▶ $1${NC}"
@@ -98,25 +84,25 @@ confirm_no_default() {
     local prompt="$1"
     local result=""
     while true; do
-        echo -ne "  ${BLUE}[询问]${NC} ${prompt} (y/n): "
+        echo -ne "  ${BLUE}[询问]${NC} ${prompt} (y/n): " >&2
         read -r result
         case "$result" in
             [yY]|[yY][eE][sS]) return 0 ;;
             [nN]|[nN][oO]) return 1 ;;
-            *) warn "请输入 y 或 n" ;;
+            *) echo -e "  ${YELLOW}[警告]${NC} 请输入 y 或 n" >&2 ;;
         esac
     done
 }
 
-# 读取用户输入
+# 读取用户输入 — 提示走 stderr，只有结果走 stdout
 read_input() {
     local prompt="$1"
     local default="${2:-}"
     local result=""
     if [[ -n "$default" ]]; then
-        echo -ne "  ${BLUE}[输入]${NC} ${prompt} [${default}]: "
+        echo -ne "  ${BLUE}[输入]${NC} ${prompt} [${default}]: " >&2
     else
-        echo -ne "  ${BLUE}[输入]${NC} ${prompt}: "
+        echo -ne "  ${BLUE}[输入]${NC} ${prompt}: " >&2
     fi
     read -r result
     if [[ -z "$result" && -n "$default" ]]; then
@@ -125,16 +111,16 @@ read_input() {
     echo "$result"
 }
 
-# 读取密码输入
+# 读取密码输入 — 提示走 stderr
 read_password() {
     local prompt="$1"
     local result=""
     while [[ -z "$result" ]]; do
-        echo -ne "  ${BLUE}[输入]${NC} ${prompt}: "
+        echo -ne "  ${BLUE}[输入]${NC} ${prompt}: " >&2
         read -rs result
-        echo ""
+        echo "" >&2
         if [[ -z "$result" ]]; then
-            warn "密码不能为空，请重新输入"
+            echo -e "  ${YELLOW}[警告]${NC} 密码不能为空，请重新输入" >&2
         fi
     done
     echo "$result"
@@ -181,7 +167,6 @@ get_sudo() {
 
 # ==================== 检测函数 ====================
 
-# 检测操作系统
 detect_os() {
     step "检测操作系统..."
 
@@ -228,22 +213,19 @@ detect_os() {
     esac
 }
 
-# 检测网络环境
 detect_network() {
     step "检测网络环境..."
 
-    # 尝试通过访问国内网站的延迟来判断
     local china_test=false
 
-    # 方法1: 检查是否能快速访问百度
+    # 方法1: 能快速访问百度但不能访问 Google
     if curl -s --connect-timeout 3 --max-time 5 "https://www.baidu.com" &>/dev/null; then
-        # 检查访问 Google 是否超时
         if ! curl -s --connect-timeout 3 --max-time 5 "https://www.google.com" &>/dev/null; then
             china_test=true
         fi
     fi
 
-    # 方法2: 通过IP地理位置API检测
+    # 方法2: IP地理位置
     if [[ "$china_test" == false ]]; then
         local country=""
         country=$(curl -s --connect-timeout 5 --max-time 8 "https://ipapi.co/country_code/" 2>/dev/null || true)
@@ -256,8 +238,6 @@ detect_network() {
         IS_CHINA=true
         info "检测到您位于中国大陆网络环境"
         info "将自动启用 GitHub 加速和 npm 镜像"
-
-        # 寻找可用的 GitHub 代理
         find_github_proxy
     else
         IS_CHINA=false
@@ -265,10 +245,8 @@ detect_network() {
     fi
 }
 
-# 寻找可用的 GitHub 代理
 find_github_proxy() {
     info "正在测试 GitHub 代理可用性..."
-
     for proxy in "${GITHUB_PROXIES[@]}"; do
         local test_url="${proxy}https://github.com/SillyTavern/SillyTavern/raw/release/package.json"
         if curl -s --connect-timeout 5 --max-time 10 "$test_url" &>/dev/null; then
@@ -277,12 +255,10 @@ find_github_proxy() {
             return 0
         fi
     done
-
     warn "未找到可用的 GitHub 代理，将尝试直连"
     GITHUB_PROXY=""
 }
 
-# 获取 GitHub 地址 (根据是否需要代理)
 get_github_url() {
     local url="$1"
     if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
@@ -294,7 +270,6 @@ get_github_url() {
 
 # ==================== 安装函数 ====================
 
-# 更新包管理器缓存
 update_pkg_cache() {
     info "更新软件包缓存..."
     case "$PKG_MANAGER" in
@@ -307,7 +282,6 @@ update_pkg_cache() {
     esac
 }
 
-# 安装 Git
 install_git() {
     if command_exists git; then
         local git_ver
@@ -335,20 +309,15 @@ install_git() {
     fi
 }
 
-# 检查 Node.js 版本是否满足要求
 check_node_version() {
     if ! command_exists node; then
         return 1
     fi
     local ver
     ver=$(node -v | sed 's/v//' | cut -d. -f1)
-    if [[ "$ver" -ge "$MIN_NODE_VERSION" ]]; then
-        return 0
-    fi
-    return 1
+    [[ "$ver" -ge "$MIN_NODE_VERSION" ]]
 }
 
-# 安装 Node.js
 install_nodejs() {
     if check_node_version; then
         local node_ver
@@ -371,7 +340,9 @@ install_nodejs() {
         install_nodejs_standard
     fi
 
-    # 验证安装
+    # 刷新 hash 表让 bash 找到新安装的 node
+    hash -r 2>/dev/null || true
+
     if check_node_version; then
         success "Node.js $(node -v) 安装完成"
         success "npm $(npm -v) 已就绪"
@@ -380,7 +351,6 @@ install_nodejs() {
         exit 1
     fi
 
-    # 为中国用户配置 npm 镜像
     if [[ "$IS_CHINA" == true ]]; then
         info "配置 npm 镜像为 npmmirror..."
         npm config set registry https://registry.npmmirror.com
@@ -388,15 +358,16 @@ install_nodejs() {
     fi
 }
 
-# 标准方式安装 Node.js
 install_nodejs_standard() {
     case "$PKG_MANAGER" in
         apt)
             info "通过 NodeSource 安装 Node.js 20.x..."
             $NEED_SUDO apt-get install -y -qq ca-certificates curl gnupg
             $NEED_SUDO mkdir -p /etc/apt/keyrings
-            curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | $NEED_SUDO gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
-            echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | $NEED_SUDO tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+            curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+                | $NEED_SUDO gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
+            echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+                | $NEED_SUDO tee /etc/apt/sources.list.d/nodesource.list >/dev/null
             $NEED_SUDO apt-get update -qq
             $NEED_SUDO apt-get install -y -qq nodejs
             ;;
@@ -420,28 +391,25 @@ install_nodejs_standard() {
     esac
 }
 
-# 中国加速安装 Node.js (直接下载二进制)
 install_nodejs_china() {
     info "从 npmmirror 下载 Node.js 二进制文件..."
     install_nodejs_binary "https://npmmirror.com/mirrors/node"
 }
 
-# 通过二进制方式安装 Node.js
 install_nodejs_binary() {
     local mirror="${1:-https://nodejs.org/dist}"
     local node_ver="v20.18.0"
     local arch=""
 
     case "$(uname -m)" in
-        x86_64|amd64) arch="x64" ;;
-        aarch64|arm64) arch="arm64" ;;
-        armv7l) arch="armv7l" ;;
+        x86_64|amd64)  arch="x64"    ;;
+        aarch64|arm64) arch="arm64"  ;;
+        armv7l)        arch="armv7l" ;;
         *) error "不支持的CPU架构: $(uname -m)"; exit 1 ;;
     esac
 
     local filename="node-${node_ver}-linux-${arch}.tar.xz"
     local download_url="${mirror}/${node_ver}/${filename}"
-
     info "下载地址: $download_url"
 
     local tmp_dir
@@ -455,9 +423,7 @@ install_nodejs_binary() {
         $NEED_SUDO cp -rf "node-${node_ver}-linux-${arch}"/{bin,include,lib} /usr/local/
         cd - >/dev/null
         rm -rf "$tmp_dir"
-
-        # 确保路径正确
-        hash -r
+        hash -r 2>/dev/null || true
     else
         rm -rf "$tmp_dir"
         error "Node.js 下载失败"
@@ -465,14 +431,12 @@ install_nodejs_binary() {
     fi
 }
 
-# 安装全部依赖
 install_dependencies() {
     step "安装系统依赖..."
 
     get_sudo
     update_pkg_cache
 
-    # 安装基础工具
     info "安装基础工具 (curl, wget, tar)..."
     case "$PKG_MANAGER" in
         apt)    $NEED_SUDO apt-get install -y -qq curl wget tar xz-utils ;;
@@ -480,7 +444,7 @@ install_dependencies() {
         dnf)    $NEED_SUDO dnf install -y -q curl wget tar xz ;;
         pacman) $NEED_SUDO pacman -S --noconfirm --needed curl wget tar xz ;;
         apk)    $NEED_SUDO apk add curl wget tar xz ;;
-        brew)   : ;;  # macOS 自带
+        brew)   : ;;
     esac
 
     install_git
@@ -489,11 +453,9 @@ install_dependencies() {
 
 # ==================== SillyTavern 操作 ====================
 
-# 克隆 SillyTavern
 clone_sillytavern() {
     step "克隆 SillyTavern 仓库..."
 
-    # 选择安装目录
     INSTALL_DIR=$(read_input "请输入安装目录" "$DEFAULT_INSTALL_DIR")
 
     if [[ -d "$INSTALL_DIR" ]]; then
@@ -512,7 +474,6 @@ clone_sillytavern() {
         fi
     fi
 
-    # 选择分支
     echo ""
     ask "请选择要安装的分支:"
     echo -e "    ${GREEN}1)${NC} release  - 稳定版 (推荐)"
@@ -524,12 +485,9 @@ clone_sillytavern() {
     done
 
     local branch="release"
-    if [[ "$branch_choice" == "2" ]]; then
-        branch="staging"
-    fi
+    [[ "$branch_choice" == "2" ]] && branch="staging"
     info "选择分支: $branch"
 
-    # 克隆
     local repo_url
     repo_url=$(get_github_url "$SILLYTAVERN_REPO")
     info "克隆地址: $repo_url"
@@ -537,7 +495,6 @@ clone_sillytavern() {
     if git clone -b "$branch" --single-branch --depth 1 "$repo_url" "$INSTALL_DIR"; then
         success "SillyTavern 仓库克隆完成"
     else
-        # 如果代理失败，尝试直连
         if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
             warn "代理克隆失败，尝试直连..."
             if git clone -b "$branch" --single-branch --depth 1 "$SILLYTAVERN_REPO" "$INSTALL_DIR"; then
@@ -552,7 +509,6 @@ clone_sillytavern() {
         fi
     fi
 
-    # 安装 npm 依赖
     step "安装 npm 依赖..."
     cd "$INSTALL_DIR"
     if npm install --no-audit --no-fund 2>&1 | tail -5; then
@@ -566,14 +522,12 @@ clone_sillytavern() {
     save_config
 }
 
-# 配置 SillyTavern
 configure_sillytavern() {
     step "配置 SillyTavern..."
 
     local config_file="$INSTALL_DIR/config.yaml"
     local default_file="$INSTALL_DIR/default.yaml"
 
-    # 生成配置文件
     if [[ ! -f "$config_file" ]]; then
         if [[ -f "$default_file" ]]; then
             cp "$default_file" "$config_file"
@@ -590,7 +544,7 @@ configure_sillytavern() {
     divider
     echo ""
 
-    # 1. 监听设置
+    # --- 1. 监听 ---
     echo -e "  ${YELLOW}● 监听设置${NC}"
     echo -e "    开启后 SillyTavern 将监听所有网络接口 (0.0.0.0)"
     echo -e "    允许局域网内其他设备或外网访问"
@@ -604,14 +558,14 @@ configure_sillytavern() {
         info "保持仅本机访问"
     fi
 
-    # 端口设置
+    # --- 端口 ---
     echo ""
     local port
     port=$(read_input "请设置端口号" "8000")
     sed -i "s/^\( *\)port:.*/\1port: ${port}/" "$config_file"
     info "端口设置为: $port"
 
-    # 2. 白名单模式
+    # --- 2. 白名单 ---
     echo ""
     echo -e "  ${YELLOW}● 白名单模式${NC}"
     echo -e "    开启后仅白名单中的 IP 可以访问"
@@ -625,7 +579,7 @@ configure_sillytavern() {
         info "保持白名单模式开启"
     fi
 
-    # 3. 基础认证
+    # --- 3. 基础认证 ---
     echo ""
     echo -e "  ${YELLOW}● 基础认证 (basicAuth)${NC}"
     echo -e "    开启后访问 SillyTavern 需要输入用户名和密码"
@@ -645,7 +599,6 @@ configure_sillytavern() {
         local auth_pass
         auth_pass=$(read_password "请设置认证密码")
 
-        # 修改 basicAuthUser 下的 username 和 password
         sed -i "/basicAuthUser:/,/^[^ #]/{
             s/\( *\)username:.*/\1username: \"${auth_user}\"/
             s/\( *\)password:.*/\1password: \"${auth_pass}\"/
@@ -663,7 +616,6 @@ configure_sillytavern() {
     success "配置文件已保存到: $config_file"
 }
 
-# 设置后台运行和开机自启动 (systemd)
 setup_service() {
     echo ""
     divider
@@ -671,7 +623,6 @@ setup_service() {
     divider
     echo ""
 
-    # 检查 systemd 是否可用
     if ! command_exists systemctl; then
         warn "当前系统不支持 systemd，无法设置后台运行和开机自启"
         warn "您可以手动使用 screen/tmux 来保持后台运行"
@@ -744,14 +695,16 @@ EOF
     fi
 }
 
-# 启动 SillyTavern
 start_sillytavern() {
-    if ! check_installed; then return 1; fi
+    if ! check_installed; then
+        error "SillyTavern 未安装"
+        return 1
+    fi
 
     local port
     port=$(grep -E '^\s*port:' "$INSTALL_DIR/config.yaml" 2>/dev/null | awk '{print $2}' || echo "8000")
 
-    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null; then
+    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
         step "通过 systemd 启动 SillyTavern..."
         get_sudo
         $NEED_SUDO systemctl start "$SERVICE_NAME"
@@ -784,7 +737,6 @@ start_sillytavern() {
     fi
 }
 
-# 停止 SillyTavern
 stop_sillytavern() {
     if command_exists systemctl && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         step "停止 SillyTavern 服务..."
@@ -792,7 +744,6 @@ stop_sillytavern() {
         $NEED_SUDO systemctl stop "$SERVICE_NAME"
         success "SillyTavern 已停止"
     else
-        # 尝试通过 PID 停止
         local pid
         pid=$(pgrep -f "node.*server\.js" 2>/dev/null | head -1 || true)
         if [[ -n "$pid" ]]; then
@@ -809,7 +760,15 @@ stop_sillytavern() {
     fi
 }
 
-# 查看运行状态
+format_bool() {
+    local val="${1:-false}"
+    if [[ "$val" == "true" ]]; then
+        echo -e "${GREEN}开启${NC}"
+    else
+        echo -e "${YELLOW}关闭${NC}"
+    fi
+}
+
 show_status() {
     step "SillyTavern 运行状态"
     echo ""
@@ -821,22 +780,19 @@ show_status() {
 
     info "安装目录: $INSTALL_DIR"
 
-    # 获取版本信息
     if [[ -f "$INSTALL_DIR/package.json" ]]; then
         local version
         version=$(grep '"version"' "$INSTALL_DIR/package.json" | head -1 | sed 's/.*"version".*"\(.*\)".*/\1/')
         info "版本: $version"
     fi
 
-    # 获取分支信息
     if [[ -d "$INSTALL_DIR/.git" ]]; then
         local branch
         branch=$(cd "$INSTALL_DIR" && git branch --show-current 2>/dev/null || echo "未知")
         info "分支: $branch"
     fi
 
-    # 检查运行状态
-    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null; then
+    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
         echo ""
         info "Systemd 服务状态:"
         if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
@@ -860,7 +816,6 @@ show_status() {
         echo -e "    服务模式: ${YELLOW}未配置 systemd 服务${NC}"
     fi
 
-    # 显示当前配置
     if [[ -f "$INSTALL_DIR/config.yaml" ]]; then
         echo ""
         info "当前配置:"
@@ -870,29 +825,21 @@ show_status() {
         auth_val=$(grep -E '^\s*basicAuthMode:' "$INSTALL_DIR/config.yaml" | awk '{print $2}')
         port_val=$(grep -E '^\s*port:' "$INSTALL_DIR/config.yaml" | awk '{print $2}')
 
-        echo -e "    监听所有接口: $(format_bool $listen_val)"
-        echo -e "    白名单模式:   $(format_bool $whitelist_val)"
-        echo -e "    基础认证:     $(format_bool $auth_val)"
+        echo -e "    监听所有接口: $(format_bool "$listen_val")"
+        echo -e "    白名单模式:   $(format_bool "$whitelist_val")"
+        echo -e "    基础认证:     $(format_bool "$auth_val")"
         echo -e "    端口:         ${CYAN}${port_val:-8000}${NC}"
     fi
 }
 
-format_bool() {
-    local val="$1"
-    if [[ "$val" == "true" ]]; then
-        echo -e "${GREEN}开启${NC}"
-    else
-        echo -e "${YELLOW}关闭${NC}"
-    fi
-}
-
-# 更新 SillyTavern
 update_sillytavern() {
-    if ! check_installed; then return 1; fi
+    if ! check_installed; then
+        error "SillyTavern 未安装"
+        return 1
+    fi
 
     step "更新 SillyTavern..."
 
-    # 先停止服务
     if command_exists systemctl && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         warn "检测到 SillyTavern 正在运行，需要先停止"
         if confirm_no_default "是否停止 SillyTavern 并继续更新?"; then
@@ -905,17 +852,14 @@ update_sillytavern() {
 
     cd "$INSTALL_DIR"
 
-    # 备份配置
     info "备份配置文件..."
     local backup_dir="$HOME/.ksilly_backup_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     [[ -f "config.yaml" ]] && cp "config.yaml" "$backup_dir/"
     success "配置已备份到: $backup_dir"
 
-    # 拉取更新
     info "拉取最新代码..."
 
-    # 如果在中国且有代理，设置 git remote
     if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
         local proxied_url
         proxied_url=$(get_github_url "$SILLYTAVERN_REPO")
@@ -933,16 +877,13 @@ update_sillytavern() {
         success "代码强制更新完成"
     fi
 
-    # 恢复原始 remote URL
     if [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]]; then
         git remote set-url origin "$SILLYTAVERN_REPO"
     fi
 
-    # 更新 npm 依赖
     info "更新 npm 依赖..."
     npm install --no-audit --no-fund 2>&1 | tail -3
 
-    # 恢复配置
     if [[ -f "$backup_dir/config.yaml" ]]; then
         cp "$backup_dir/config.yaml" "config.yaml"
         success "配置文件已恢复"
@@ -952,8 +893,7 @@ update_sillytavern() {
 
     success "SillyTavern 更新完成!"
 
-    # 询问是否重新启动
-    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null; then
+    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
         echo ""
         if confirm_no_default "是否立即启动 SillyTavern?"; then
             start_sillytavern
@@ -961,7 +901,6 @@ update_sillytavern() {
     fi
 }
 
-# 卸载 SillyTavern
 uninstall_sillytavern() {
     if ! check_installed; then
         error "SillyTavern 未安装"
@@ -984,11 +923,9 @@ uninstall_sillytavern() {
         return 0
     fi
 
-    # 停止服务
     stop_sillytavern
 
-    # 移除 systemd 服务
-    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null; then
+    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
         step "移除 systemd 服务..."
         get_sudo
         $NEED_SUDO systemctl disable "$SERVICE_NAME" 2>/dev/null || true
@@ -997,7 +934,6 @@ uninstall_sillytavern() {
         success "systemd 服务已移除"
     fi
 
-    # 询问是否备份数据
     local data_dir="$INSTALL_DIR/data"
     if [[ -d "$data_dir" ]]; then
         echo ""
@@ -1010,12 +946,10 @@ uninstall_sillytavern() {
         fi
     fi
 
-    # 删除安装目录
     step "删除安装目录..."
     rm -rf "$INSTALL_DIR"
     success "安装目录已删除"
 
-    # 清理配置文件
     rm -f "$KSILLY_CONF"
     success "Ksilly 配置已清理"
 
@@ -1035,20 +969,16 @@ uninstall_sillytavern() {
     fi
 }
 
-# 检查是否已安装
 check_installed() {
     load_config
     if [[ -d "$INSTALL_DIR" && -f "$INSTALL_DIR/server.js" ]]; then
         return 0
     fi
-
-    # 尝试查找默认位置
     if [[ -d "$DEFAULT_INSTALL_DIR" && -f "$DEFAULT_INSTALL_DIR/server.js" ]]; then
         INSTALL_DIR="$DEFAULT_INSTALL_DIR"
         save_config
         return 0
     fi
-
     return 1
 }
 
@@ -1072,7 +1002,6 @@ modify_config_menu() {
         divider
         echo ""
 
-        # 读取当前配置
         local listen_val whitelist_val auth_val port_val
         listen_val=$(grep -E '^\s*listen:' "$config_file" | awk '{print $2}')
         whitelist_val=$(grep -E '^\s*whitelistMode:' "$config_file" | awk '{print $2}')
@@ -1080,7 +1009,7 @@ modify_config_menu() {
         port_val=$(grep -E '^\s*port:' "$config_file" | awk '{print $2}')
 
         echo -e "  当前配置:"
-        echo -e "    监听: $(format_bool $listen_val)  |  白名单: $(format_bool $whitelist_val)  |  认证: $(format_bool $auth_val)  |  端口: ${CYAN}${port_val:-8000}${NC}"
+        echo -e "    监听: $(format_bool "$listen_val")  |  白名单: $(format_bool "$whitelist_val")  |  认证: $(format_bool "$auth_val")  |  端口: ${CYAN}${port_val:-8000}${NC}"
         echo ""
         divider
         echo ""
@@ -1174,7 +1103,6 @@ modify_config_menu() {
         esac
 
         echo ""
-        # 提示重启
         if command_exists systemctl && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
             warn "配置修改后需要重启 SillyTavern 才能生效"
             if confirm_no_default "是否立即重启?"; then
@@ -1190,9 +1118,8 @@ modify_config_menu() {
     done
 }
 
-# 查看日志
 view_logs() {
-    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null; then
+    if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
         step "SillyTavern 最近日志 (按 q 退出):"
         echo ""
         journalctl -u "$SERVICE_NAME" -n 50 --no-pager
@@ -1210,31 +1137,24 @@ full_install() {
     divider
     echo ""
 
-    # 检测环境
     detect_os
     detect_network
     echo ""
 
-    # 安装依赖
     install_dependencies
     echo ""
 
-    # 克隆仓库
     clone_sillytavern
     echo ""
 
-    # 配置
     configure_sillytavern
     echo ""
 
-    # 服务设置
     setup_service
     echo ""
 
-    # 保存配置
     save_config
 
-    # 完成提示
     divider
     echo ""
     echo -e "  ${BOLD}${GREEN}🎉 SillyTavern 安装完成!${NC}"
@@ -1265,11 +1185,11 @@ full_install() {
     else
         echo ""
         info "稍后可通过以下方式启动:"
-        if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null; then
+        if command_exists systemctl && systemctl list-unit-files "${SERVICE_NAME}.service" &>/dev/null 2>&1; then
             echo -e "    ${CYAN}sudo systemctl start ${SERVICE_NAME}${NC}"
         fi
         echo -e "    ${CYAN}cd ${INSTALL_DIR} && node server.js${NC}"
-        echo -e "    或重新运行此脚本选择启动${NC}"
+        echo -e "    或重新运行此脚本选择启动"
     fi
 
     echo ""
@@ -1282,7 +1202,6 @@ main_menu() {
         print_banner
         load_config
 
-        # 显示安装状态
         if check_installed; then
             local version=""
             if [[ -f "$INSTALL_DIR/package.json" ]]; then
@@ -1294,9 +1213,7 @@ main_menu() {
             else
                 local pid
                 pid=$(pgrep -f "node.*server\.js" 2>/dev/null | head -1 || true)
-                if [[ -n "$pid" ]]; then
-                    status_icon="${GREEN}●${NC}"
-                fi
+                [[ -n "$pid" ]] && status_icon="${GREEN}●${NC}"
             fi
             echo -e "  状态: ${status_icon} SillyTavern v${version:-未知} | 目录: ${INSTALL_DIR}"
         else
@@ -1306,22 +1223,22 @@ main_menu() {
         divider
         echo ""
         echo -e "  ${BOLD}安装与管理${NC}"
-        echo -e "  ${GREEN}1)${NC}  安装 SillyTavern"
-        echo -e "  ${GREEN}2)${NC}  更新 SillyTavern"
-        echo -e "  ${GREEN}3)${NC}  卸载 SillyTavern"
+        echo -e "  ${GREEN} 1)${NC}  安装 SillyTavern"
+        echo -e "  ${GREEN} 2)${NC}  更新 SillyTavern"
+        echo -e "  ${GREEN} 3)${NC}  卸载 SillyTavern"
         echo ""
         echo -e "  ${BOLD}运行控制${NC}"
-        echo -e "  ${GREEN}4)${NC}  启动 SillyTavern"
-        echo -e "  ${GREEN}5)${NC}  停止 SillyTavern"
-        echo -e "  ${GREEN}6)${NC}  重启 SillyTavern"
-        echo -e "  ${GREEN}7)${NC}  查看运行状态"
+        echo -e "  ${GREEN} 4)${NC}  启动 SillyTavern"
+        echo -e "  ${GREEN} 5)${NC}  停止 SillyTavern"
+        echo -e "  ${GREEN} 6)${NC}  重启 SillyTavern"
+        echo -e "  ${GREEN} 7)${NC}  查看运行状态"
         echo ""
         echo -e "  ${BOLD}配置与维护${NC}"
-        echo -e "  ${GREEN}8)${NC}  修改配置"
-        echo -e "  ${GREEN}9)${NC}  查看日志"
-        echo -e "  ${GREEN}10)${NC} 后台运行/开机自启设置"
+        echo -e "  ${GREEN} 8)${NC}  修改配置"
+        echo -e "  ${GREEN} 9)${NC}  查看日志"
+        echo -e "  ${GREEN}10)${NC}  后台运行/开机自启设置"
         echo ""
-        echo -e "  ${RED}0)${NC}  退出"
+        echo -e "  ${RED} 0)${NC}  退出"
         echo ""
         divider
 
@@ -1341,11 +1258,14 @@ main_menu() {
                 read -rp "  按 Enter 继续..."
                 ;;
             2)
+                detect_os
+                detect_network
                 update_sillytavern
                 echo ""
                 read -rp "  按 Enter 继续..."
                 ;;
             3)
+                detect_os
                 uninstall_sillytavern
                 echo ""
                 read -rp "  按 Enter 继续..."
@@ -1412,49 +1332,30 @@ main_menu() {
 # ==================== 入口 ====================
 
 main() {
-    # 检查是否在支持的系统上运行
     if [[ "$(uname)" != "Linux" && "$(uname)" != "Darwin" ]]; then
         error "此脚本仅支持 Linux 和 macOS"
         exit 1
     fi
 
-    # 加载已有配置
     load_config
 
-    # 如果有命令行参数，直接执行对应操作
     case "${1:-}" in
         install)
-            detect_os
-            detect_network
-            full_install
-            ;;
+            detect_os; detect_network; full_install ;;
         update)
-            detect_os
-            detect_network
-            load_config
-            update_sillytavern
-            ;;
+            detect_os; detect_network; load_config; update_sillytavern ;;
         start)
-            start_sillytavern
-            ;;
+            start_sillytavern ;;
         stop)
-            stop_sillytavern
-            ;;
+            stop_sillytavern ;;
         restart)
-            stop_sillytavern
-            sleep 1
-            start_sillytavern
-            ;;
+            stop_sillytavern; sleep 1; start_sillytavern ;;
         status)
-            show_status
-            ;;
+            show_status ;;
         uninstall)
-            detect_os
-            uninstall_sillytavern
-            ;;
+            detect_os; uninstall_sillytavern ;;
         "")
-            main_menu
-            ;;
+            main_menu ;;
         *)
             echo "用法: $0 {install|update|start|stop|restart|status|uninstall}"
             echo "  不带参数则进入交互式菜单"
