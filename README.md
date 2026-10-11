@@ -4,7 +4,7 @@
 
 [![Shell](https://img.shields.io/badge/Shell-Bash-green?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20|%20macOS%20|%20Termux-blue)](https://github.com/Mia1889/Ksilly)
-[![Version](https://img.shields.io/badge/Version-2.2.3-purple)](https://github.com/Mia1889/Ksilly)
+[![Version](https://img.shields.io/badge/Version-2.2.4-purple)](https://github.com/Mia1889/Ksilly)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 一条命令完成 SillyTavern 的安装、配置、HTTPS、插件管理、后台运行与更新
@@ -23,9 +23,10 @@
 | 🌏 | **国内加速** — 自动检测网络环境，大陆用户自动启用 GitHub 代理 + npm 镜像 |
 | 📱 | **多平台支持** — Linux 服务器 / macOS / Android Termux 全覆盖 |
 | 🔧 | **交互式配置** — 引导式设置监听、端口、认证、白名单、多账户等选项 |
+| ✨ | **动态反馈** — 长任务显示流动动画、耗时和完成状态；非交互环境自动降级为普通日志 |
 | 🔄 | **PM2 后台运行** — 关闭终端不中断，崩溃自动重启，支持开机自启 |
 | 🛡️ | **防火墙管理** — 自动识别并放行 UFW / firewalld / iptables 端口 |
-| 📦 | **一键更新** — 自动备份配置，拉取最新代码，更新依赖后恢复配置 |
+| 📦 | **一键更新** — 自动备份配置；覆盖本地代码修改前会明确确认 |
 | 🗑️ | **完整卸载** — 停止进程、清理服务与 HTTPS 配置、可选备份数据，干净彻底 |
 
 ---
@@ -118,6 +119,14 @@ bash ksilly.sh uninstall   # 卸载
 7. **插件安装** — 可选安装推荐插件（全部安装 / 逐个选择 / 跳过）
 8. **后台运行** — 可选配置 PM2 后台运行和开机自启
 
+### 运行反馈与安全保护
+
+- 长时间操作会显示动态进度、流动状态和已等待时间；成功与失败都有明确提示。
+- 在日志重定向、CI 等非交互环境中，动画会自动关闭，改为易读的普通输出。
+- 按下 `Ctrl+C` 时，脚本会停止当前动画任务、恢复终端光标并清理临时日志。
+- 脚本配置保存在 `~/.ksilly.conf`，仅当前用户可读；配置内容按数据读取，不会作为 Shell 命令执行。
+- 更新遇到本地提交或改动时，脚本不会直接覆盖；选择强制同步前会展示改动并要求确认。
+
 ### 配置管理
 
 通过菜单 `8) 修改配置` 可随时调整：
@@ -155,6 +164,7 @@ bash ksilly.sh uninstall   # 卸载
 - Caddy 监听 443 端口处理 TLS 加密
 - SillyTavern 改为仅本地监听，由 Caddy 反代转发
 - 原始 HTTP 端口不再对外暴露
+- 脚本仅维护 Caddyfile 中标记为 `KSILLY` 的配置区块，不会覆盖同一台机器上的其他 Caddy 站点
 
 ### HTTPS 管理菜单
 
@@ -256,9 +266,11 @@ bash ksilly.sh uninstall   # 卸载
 └── ...
 
 ~/.ksilly.conf                                          # Ksilly 脚本配置
-/etc/caddy/Caddyfile                                    # Caddy 配置（启用 HTTPS 后）
+/etc/caddy/Caddyfile                                    # Linux 的 Caddy 配置（启用 HTTPS 后）
 /etc/caddy/certs/                                       # 自签证书目录（自签模式）
 ```
+
+> macOS 通过 Homebrew 管理 Caddy；配置文件通常位于 `/opt/homebrew/etc/Caddyfile`（Apple Silicon）或 `/usr/local/etc/Caddyfile`（Intel）。
 
 ---
 
