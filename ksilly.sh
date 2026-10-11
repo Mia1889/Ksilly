@@ -41,7 +41,8 @@ readonly PLUGIN_2_REPO_INTL="https://github.com/zonde306/ST-Prompt-Template.git"
 readonly PLUGIN_2_REPO_CN="https://codeberg.org/zonde306/ST-Prompt-Template.git"
 
 # ==================== Caddy / HTTPS 常量 ====================
-readonly CADDYFILE_PATH="/etc/caddy/Caddyfile"
+# 由 detect_os 为 Homebrew 环境调整为实际配置路径。
+CADDYFILE_PATH="/etc/caddy/Caddyfile"
 readonly CADDY_SERVICE="caddy"
 readonly CADDY_CERT_DIR="/etc/caddy/certs"
 readonly CADDY_AUTOSAVE="/var/lib/caddy/.config/caddy/autosave.json"
@@ -75,85 +76,66 @@ CACHED_PUBLIC_IP=""
 CADDY_HTTPS_ENABLED=false
 CADDY_DOMAIN=""
 CADDY_CERT_TYPE=""
+SPIN_PID=""
+SPIN_LOG=""
 
 # ==================== 旋转动画 ====================
 
 spin() {
     local msg="$1"
     shift
-    local tmplog
-    tmplog=$(mktemp)
-    trap 'rm -f "$tmplog"' RETURN
+    local tmplog i=0 start_time=$SECONDS ret elapsed dot_count
 
+    # 重定向输出或不支持 ANSI 的环境保持干净、可读的普通日志。
+    if [[ ! -t 1 ]]; then
+        printf '  → %s\n' "$msg"
+        "$@"
+        return $?
+    fi
+
+    tmplog=$(mktemp) || return 1
+    SPIN_LOG="$tmplog"
     "$@" > "$tmplog" 2>&1 &
-    local cmd_pid=$!
+    SPIN_PID=$!
 
-    local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    local i=0
-    local start_time=$SECONDS
+    local frames=('◐' '◓' '◑' '◒')
+    local trail=('✦····' '·✦···' '··✦··' '···✦·' '····✦' '···✦·' '··✦··' '·✦···')
 
     tput civis 2>/dev/null
-
-    while kill -0 "$cmd_pid" 2>/dev/null; do
-        local elapsed=$(( SECONDS - start_time ))
-        printf "\r  ${PINK}%s${NC} %s ${DIM}(%ds)${NC}  " "${frames[i++ % ${#frames[@]}]}" "$msg" "$elapsed"
-        sleep 0.1
+    while kill -0 "$SPIN_PID" 2>/dev/null; do
+        elapsed=$(( SECONDS - start_time ))
+        dot_count=$(( i % ${#trail[@]} ))
+        printf "\r\033[K  ${PINK}%s${NC} ${BOLD}%s${NC}  ${DIM}%s  ·  %02ds${NC}" \
+            "${frames[i % ${#frames[@]}]}" "$msg" "${trail[dot_count]}" "$elapsed"
+        ((i++))
+        sleep 0.12
     done
 
-    wait "$cmd_pid"
-    local ret=$?
-
+    wait "$SPIN_PID"
+    ret=$?
+    SPIN_PID=""
     printf "\r\033[K"
     tput cnorm 2>/dev/null
 
-    if [[ $ret -ne 0 ]]; then
-        tail -3 "$tmplog" 2>/dev/null | while IFS= read -r line; do
+    if [[ $ret -eq 0 ]]; then
+        printf "  ${GREEN}✦${NC} ${msg} ${DIM}完成啦♡${NC}\n"
+    else
+        printf "  ${RED}✕${NC} ${msg} ${DIM}没有完成${NC}\n"
+        tail -12 "$tmplog" 2>/dev/null | while IFS= read -r line; do
             [[ -n "$line" ]] && echo -e "    ${DIM}${line}${NC}"
         done
     fi
-
-    return $ret
+    rm -f "$tmplog"
+    SPIN_LOG=""
+    return "$ret"
 }
 
 spin_cmd() {
-    local msg="$1"
-    local cmd="$2"
-    local tmplog
-    tmplog=$(mktemp)
-    trap 'rm -f "$tmplog"' RETURN
-
-    bash -c "$cmd" > "$tmplog" 2>&1 &
-    local cmd_pid=$!
-
-    local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    local i=0
-    local start_time=$SECONDS
-
-    tput civis 2>/dev/null
-
-    while kill -0 "$cmd_pid" 2>/dev/null; do
-        local elapsed=$(( SECONDS - start_time ))
-        printf "\r  ${PINK}%s${NC} %s ${DIM}(%ds)${NC}  " "${frames[i++ % ${#frames[@]}]}" "$msg" "$elapsed"
-        sleep 0.1
-    done
-
-    wait "$cmd_pid"
-    local ret=$?
-
-    printf "\r\033[K"
-    tput cnorm 2>/dev/null
-
-    if [[ $ret -ne 0 ]]; then
-        tail -3 "$tmplog" 2>/dev/null | while IFS= read -r line; do
-            [[ -n "$line" ]] && echo -e "    ${DIM}${line}${NC}"
-        done
-    fi
-
-    return $ret
+    spin "$1" bash -c "$2"
 }
 
 # ==================== 信号处理 ====================
-trap 'printf "\r\033[K"; tput cnorm 2>/dev/null; echo ""; warn "哼~杂鱼按 Ctrl+C 跑掉了♡"; exit 130' INT
+trap '[[ -n "$SPIN_PID" ]] && kill "$SPIN_PID" 2>/dev/null; rm -f "$SPIN_LOG" 2>/dev/null; printf "\r\033[K"; tput cnorm 2>/dev/null; echo ""; warn "哎呀，按 Ctrl+C 逃走啦？下次可别半途而废哦♡"; exit 130' INT TERM
 
 # ==================== 输出函数 ====================
 
@@ -167,7 +149,7 @@ print_banner() {
     echo -e "${PINK}  ██║  ██╗███████║██║███████╗███████╗██║${NC}"
     echo -e "${PINK}  ╚═╝  ╚═╝╚══════╝╚═╝╚══════╝╚══════╝╚═╝${NC}"
     echo ""
-    echo -e "  ${BOLD}才不是为杂鱼准备的部署脚本呢${NC} ${PINK}♡${NC} ${DIM}v${SCRIPT_VERSION}${NC}"
+    echo -e "  ${BOLD}才、才不是特意为你准备的一键部署呢${NC} ${PINK}♡${NC} ${DIM}v${SCRIPT_VERSION}${NC}"
     echo -e "  ${DIM}by Mia1889 · github.com/Mia1889/Ksilly${NC}"
     echo ""
     echo -e "        ${FOX}▄▀▀▀▄${NC}  ${ORANGE}▄▀▀▀▄${NC}"
@@ -203,7 +185,7 @@ confirm() {
         case "$result" in
             [yY]|[yY][eE][sS]) return 0 ;;
             [nN]|[nN][oO]) return 1 ;;
-            *) warn "只能输 y 或 n 哦~这都不懂吗杂鱼♡" ;;
+            *) warn "这里只收 y 或 n 啦，乖一点重新选♡" ;;
         esac
     done
 }
@@ -225,7 +207,7 @@ read_input() {
 read_password() {
     local prompt="$1"
     local result=""
-    echo -e "  ${YELLOW}⚠ 输入密码的时候屏幕不会显示字符哦~别以为坏掉了笨蛋♡${NC}" >&2
+    echo -e "  ${YELLOW}⚠ 输入密码时不会显示字符，这是正常的，别紧张呀♡${NC}" >&2
     while [[ -z "$result" ]]; do
         echo -ne "  ${PINK}→${NC} ${prompt}: " >&2
         read -rs result
@@ -256,7 +238,7 @@ get_sudo() {
     elif command_exists sudo; then
         NEED_SUDO="sudo"
     else
-        error "需要 root 权限但找不到 sudo~杂鱼是不是忘了装♡"
+        error "这里需要 root 权限，可是没找到 sudo；先把它准备好再来嘛♡"
         return 1
     fi
 }
@@ -274,10 +256,43 @@ get_yaml_val() {
 set_yaml_val() {
     local key="$1" value="$2" file="$3"
     if grep -qE "^\s*${key}:" "$file" 2>/dev/null; then
-        sed -i "s|^\([[:space:]]*\)${key}:.*|\1${key}: ${value}|" "$file"
+        sed_inplace "s|^\([[:space:]]*\)${key}:.*|\1${key}: ${value}|" "$file"
     else
         echo "${key}: ${value}" >> "$file"
     fi
+}
+
+# BSD sed（macOS）要求 -i 参数带备份扩展名，GNU sed 则不需要。
+sed_inplace() {
+    local expression="$1" file="$2"
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        sed -i '' "$expression" "$file"
+    else
+        sed -i "$expression" "$file"
+    fi
+}
+
+normalize_yaml_tree() {
+    local root="$1" yaml_file
+    while IFS= read -r -d '' yaml_file; do
+        sed_inplace 's/\r$//' "$yaml_file"
+    done < <(find "$root" -name "*.yaml" -print0 2>/dev/null)
+}
+
+yaml_quote() {
+    local value="$1"
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    value=${value//$'\t'/\\t}
+    printf '"%s"' "$value"
+}
+
+sed_replacement_escape() {
+    local value="$1"
+    value=${value//\\/\\\\}
+    value=${value//&/\\&}
+    value=${value//|/\\|}
+    printf '%s' "$value"
 }
 
 get_port() {
@@ -357,7 +372,7 @@ show_access_info() {
     listen=$(get_yaml_val "listen" "$config_file")
 
     echo ""
-    echo -e "  ${BOLD}访问地址 (记好了哦杂鱼♡):${NC}"
+    echo -e "  ${BOLD}访问地址（要记好哦，不许转头就忘）:${NC}"
 
     if [[ "$CADDY_HTTPS_ENABLED" == "true" ]]; then
         if [[ -n "$CADDY_DOMAIN" && "$CADDY_CERT_TYPE" == "acme" ]]; then
@@ -373,7 +388,7 @@ show_access_info() {
             if [[ -n "$public_ip" ]]; then
                 echo -e "    公网访问   → ${CYAN}https://${public_ip}${NC} ${DIM}(需信任自签证书)${NC}"
             else
-                echo -e "    公网访问   → ${YELLOW}获取不到公网IP~杂鱼自己查吧♡${NC}"
+                echo -e "    公网访问   → ${YELLOW}暂时没拿到公网 IP，检查网络后再试试♡${NC}"
             fi
         fi
         echo ""
@@ -396,7 +411,7 @@ show_access_info() {
             if [[ -n "$public_ip" ]]; then
                 echo -e "    公网访问   → ${CYAN}http://${public_ip}:${port}${NC}"
             else
-                echo -e "    公网访问   → ${YELLOW}获取不到公网IP~杂鱼自己查吧♡${NC}"
+                echo -e "    公网访问   → ${YELLOW}暂时没拿到公网 IP，检查网络后再试试♡${NC}"
             fi
         fi
     fi
@@ -406,11 +421,29 @@ show_access_info() {
 
 load_config() {
     if [[ -f "$KSILLY_CONF" ]]; then
-        source "$KSILLY_CONF" 2>/dev/null || true
-        INSTALL_DIR="${KSILLY_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
-        CADDY_HTTPS_ENABLED="${KSILLY_HTTPS_ENABLED:-false}"
-        CADDY_DOMAIN="${KSILLY_CADDY_DOMAIN:-}"
-        CADDY_CERT_TYPE="${KSILLY_CADDY_CERT_TYPE:-}"
+        # 配置文件属于数据而非 shell 脚本；绝不能 source，否则恶意或损坏的
+        # 配置可在启动管理脚本时执行命令。
+        local val
+        read_ksilly_conf() {
+            local requested_key="$1" result
+            result=$(awk -F= -v key="$requested_key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$KSILLY_CONF" 2>/dev/null)
+            # 兼容旧版本写出的双引号值，但绝不对值求值。
+            result="${result#\"}"
+            result="${result%\"}"
+            printf '%s' "$result"
+        }
+        val=$(read_ksilly_conf "KSILLY_INSTALL_DIR")
+        INSTALL_DIR="${val:-$DEFAULT_INSTALL_DIR}"
+        val=$(read_ksilly_conf "KSILLY_IS_CHINA")
+        [[ "$val" == "true" || "$val" == "false" ]] && IS_CHINA="$val"
+        val=$(read_ksilly_conf "KSILLY_GITHUB_PROXY")
+        GITHUB_PROXY="$val"
+        val=$(read_ksilly_conf "KSILLY_HTTPS_ENABLED")
+        CADDY_HTTPS_ENABLED="${val:-false}"
+        val=$(read_ksilly_conf "KSILLY_CADDY_DOMAIN")
+        CADDY_DOMAIN="$val"
+        val=$(read_ksilly_conf "KSILLY_CADDY_CERT_TYPE")
+        CADDY_CERT_TYPE="$val"
     else
         INSTALL_DIR="$DEFAULT_INSTALL_DIR"
         CADDY_HTTPS_ENABLED=false
@@ -420,14 +453,19 @@ load_config() {
 }
 
 save_config() {
+    local old_umask
+    old_umask=$(umask)
+    umask 077
     cat > "$KSILLY_CONF" << EOF
-KSILLY_INSTALL_DIR="${INSTALL_DIR}"
-KSILLY_IS_CHINA="${IS_CHINA}"
-KSILLY_GITHUB_PROXY="${GITHUB_PROXY}"
-KSILLY_HTTPS_ENABLED="${CADDY_HTTPS_ENABLED}"
-KSILLY_CADDY_DOMAIN="${CADDY_DOMAIN}"
-KSILLY_CADDY_CERT_TYPE="${CADDY_CERT_TYPE}"
+KSILLY_INSTALL_DIR=${INSTALL_DIR}
+KSILLY_IS_CHINA=${IS_CHINA}
+KSILLY_GITHUB_PROXY=${GITHUB_PROXY}
+KSILLY_HTTPS_ENABLED=${CADDY_HTTPS_ENABLED}
+KSILLY_CADDY_DOMAIN=${CADDY_DOMAIN}
+KSILLY_CADDY_CERT_TYPE=${CADDY_CERT_TYPE}
 EOF
+    chmod 600 "$KSILLY_CONF" 2>/dev/null || true
+    umask "$old_umask"
 }
 
 check_installed() {
@@ -469,14 +507,14 @@ save_script() {
 # ==================== 环境检测 ====================
 
 detect_os() {
-    step "人家看看杂鱼用的什么环境~"
+    step "让我看看你的小环境准备得怎么样了~"
 
     if [[ -n "${TERMUX_VERSION:-}" ]] || [[ -d "/data/data/com.termux" ]]; then
         IS_TERMUX=true
         OS_TYPE="termux"
         PKG_MANAGER="pkg"
         NEED_SUDO=""
-        info "Termux 啊~用手机玩的杂鱼♡"
+        info "是 Termux 呀~手机上也要认真折腾，挺努力嘛♡"
         return
     fi
 
@@ -499,11 +537,11 @@ detect_os() {
         centos|rhel|rocky|almalinux|fedora)
             PKG_MANAGER="yum"
             command_exists dnf && PKG_MANAGER="dnf"
-            info "RHEL/CentOS ($OS_TYPE) ~老古董呢♡"
+            info "RHEL/CentOS ($OS_TYPE) ~稳重派的选择呢♡"
             ;;
         arch|manjaro)
             PKG_MANAGER="pacman"
-            info "Arch ($OS_TYPE) ~哦~会装Arch的杂鱼♡"
+            info "Arch ($OS_TYPE) ~会选 Arch，看来你还挺会折腾♡"
             ;;
         alpine)
             PKG_MANAGER="apk"
@@ -511,7 +549,12 @@ detect_os() {
             ;;
         macos)
             PKG_MANAGER="brew"
-            info "macOS ~有钱的杂鱼♡"
+            if [[ -f "/opt/homebrew/etc/Caddyfile" || -d "/opt/homebrew/etc" ]]; then
+                CADDYFILE_PATH="/opt/homebrew/etc/Caddyfile"
+            else
+                CADDYFILE_PATH="/usr/local/etc/Caddyfile"
+            fi
+            info "macOS ~嗯，审美还不错嘛♡"
             ;;
         *)
             warn "这什么奇怪的系统: $OS_TYPE ~人家试试看吧♡"
@@ -521,7 +564,7 @@ detect_os() {
 }
 
 detect_network() {
-    step "帮杂鱼看看网络环境~"
+    step "我来看看网络通不通，别急着催嘛~"
 
     if [[ "$IS_TERMUX" == true ]]; then
         detect_network_termux
@@ -548,7 +591,7 @@ detect_network() {
         find_github_proxy
     else
         IS_CHINA=false
-        info "能直连 GitHub~运气不错嘛杂鱼♡"
+        info "GitHub 可以直连，今天运气不错呢♡"
     fi
 }
 
@@ -588,13 +631,13 @@ detect_network_termux() {
             IS_CHINA=true
             find_github_proxy
         else
-            info "能直连 GitHub~运气不错嘛杂鱼♡"
+            info "GitHub 可以直连，今天运气不错呢♡"
         fi
     fi
 }
 
 find_github_proxy() {
-    info "测试代理中~杂鱼等一下♡"
+    info "正在挑一个顺手的代理，耐心等我一下♡"
     for proxy in "${GITHUB_PROXIES[@]}"; do
         local test_url="${proxy}https://github.com/SillyTavern/SillyTavern/raw/release/package.json"
         if curl -s --connect-timeout 5 --max-time 10 "$test_url" &>/dev/null; then
@@ -603,7 +646,7 @@ find_github_proxy() {
             return 0
         fi
     done
-    warn "代理全挂了~硬连吧杂鱼♡"
+    warn "这些代理都不太争气，先试试直连吧♡"
     GITHUB_PROXY=""
 }
 
@@ -638,7 +681,7 @@ setup_termux_mirror() {
         if [[ -f "$PREFIX/etc/apt/sources.list" ]]; then
             if ! grep -q "mirrors.tuna\|mirrors.ustc\|mirrors.bfsu\|mirrors.aliyun" "$PREFIX/etc/apt/sources.list" 2>/dev/null; then
                 cp "$PREFIX/etc/apt/sources.list" "$PREFIX/etc/apt/sources.list.bak" 2>/dev/null || true
-                sed -i 's|https://packages.termux.dev/apt/termux-main|https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main|g' \
+                sed_inplace 's|https://packages.termux.dev/apt/termux-main|https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main|g' \
                     "$PREFIX/etc/apt/sources.list" 2>/dev/null || true
                 info "Termux 源已切换为清华镜像~♡"
             else
@@ -686,7 +729,7 @@ git_clone_with_retry() {
         warn "失败~换下一个源♡"
     done
 
-    error "所有源都失败了~杂鱼检查网络吧♡"
+    error "所有下载源都失败了，检查网络后再让我试一次吧♡"
     return 1
 }
 
@@ -804,7 +847,7 @@ install_nodejs() {
         info "Node.js $(node -v) 装好了~厉害吧♡"
         ensure_npm_mirror
     else
-        error "Node.js 装不上~杂鱼的机器是不是太烂了♡"
+        error "Node.js 还是没装好，环境似乎有点小脾气；把报错发给我看看吧♡"
         return 1
     fi
 }
@@ -895,7 +938,7 @@ install_nodejs_binary() {
         refresh_path
     else
         rm -rf "$tmp_dir"
-        error "Node.js 下载失败了~网络太烂了吧杂鱼♡"
+        error "Node.js 下载失败了，网络可能不太稳定；稍后再试一次吧♡"
         return 1
     fi
 }
@@ -935,7 +978,7 @@ install_pm2() {
         info "PM2 装好了~♡"
         return 0
     else
-        warn "全局安装失败了~用 npx 凑合吧杂鱼♡"
+        warn "全局安装没成功，先别慌，我们换个方式处理♡"
         return 1
     fi
 }
@@ -978,7 +1021,7 @@ pm2_start() {
         show_access_info
         return 0
     else
-        error "启动失败了~用 'pm2 logs $SERVICE_NAME' 看看怎么回事吧杂鱼♡"
+        error "启动没有成功，运行 'pm2 logs $SERVICE_NAME' 看看它在闹什么小情绪吧♡"
         return 1
     fi
 }
@@ -997,10 +1040,10 @@ pm2_stop() {
             kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
             info "进程杀掉了~♡"
         else
-            info "本来就没在跑啊~杂鱼瞎操心♡"
+            info "它本来就没在运行，不用替它操心啦♡"
         fi
     else
-        info "本来就没在跑啊~杂鱼瞎操心♡"
+        info "它本来就没在运行，不用替它操心啦♡"
     fi
 }
 
@@ -1024,7 +1067,7 @@ BOOTEOF
         chmod +x "$HOME/.termux/boot/sillytavern.sh"
         pm2 save &>/dev/null
         success "Termux 开机自启搞好了~♡"
-        warn "记得装 Termux:Boot 哦笨蛋♡"
+        warn "别忘了安装 Termux:Boot，不然开机自启可不会自己出现哦♡"
     else
         echo ""
         info "生成自启动配置中..."
@@ -1139,7 +1182,7 @@ open_firewall_port() {
     [[ "$firewall_found" == false ]] && info "没检测到防火墙~♡"
 
     echo ""
-    warn "云服务器的杂鱼记得去安全组也放行端口 ${port} 哦~别忘了♡"
+    warn "云服务器还要记得在安全组放行端口 ${port}，这次可别漏掉哦♡"
 }
 
 remove_firewall_port() {
@@ -1175,7 +1218,7 @@ install_openssl() {
         pacman) spin "安装 openssl~♡" $NEED_SUDO pacman -S --noconfirm openssl ;;
         apk)    spin "安装 openssl~♡" $NEED_SUDO apk add openssl ;;
         brew)   spin "安装 openssl~♡" brew install openssl ;;
-        *)      error "装不了 openssl~杂鱼自己想办法♡"; return 1 ;;
+        *)      error "这个系统暂时不知道怎么安装 openssl，先手动装好再叫我吧♡"; return 1 ;;
     esac
 
     command_exists openssl || { error "openssl 装不上~♡"; return 1; }
@@ -1185,7 +1228,7 @@ generate_self_signed_cert() {
     get_sudo || return 1
     install_openssl || return 1
 
-    step "生成自签证书~杂鱼什么都不用管♡"
+    step "生成自签证书中~这一步交给我，你稍微等着就好♡"
 
     $NEED_SUDO mkdir -p "$CADDY_CERT_DIR"
     $NEED_SUDO chmod 755 "$CADDY_CERT_DIR"
@@ -1284,7 +1327,7 @@ install_caddy() {
         success "Caddy 装好了~♡"
         return 0
     else
-        error "Caddy 装不上~杂鱼的环境有问题吧♡"
+        error "Caddy 没装成功，环境可能有点问题；看看上面的提示再试试吧♡"
         return 1
     fi
 }
@@ -1292,6 +1335,9 @@ install_caddy() {
 is_caddy_running() {
     if [[ "$IS_TERMUX" == true ]]; then
         return 1
+    fi
+    if [[ "$OS_TYPE" == "macos" ]] && command_exists brew; then
+        brew services list 2>/dev/null | awk '$1 == "caddy" && $2 == "started" { found=1 } END { exit !found }' && return 0
     fi
     if command_exists systemctl; then
         systemctl is-active --quiet "$CADDY_SERVICE" 2>/dev/null && return 0
@@ -1320,12 +1366,17 @@ caddy_start() {
         fi
     fi
 
-    $NEED_SUDO systemctl enable "$CADDY_SERVICE" &>/dev/null
-    $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        brew services restart caddy &>/dev/null || brew services start caddy &>/dev/null
+    else
+        $NEED_SUDO systemctl enable "$CADDY_SERVICE" &>/dev/null
+        $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
+    fi
     sleep 2
 
     if is_caddy_running; then
-        if ss -tlnp 2>/dev/null | grep -q ':443\b'; then
+        if (command_exists ss && ss -tlnp 2>/dev/null | grep -q ':443\b') || \
+           ([[ "$OS_TYPE" == "macos" ]] && lsof -nP -iTCP:443 -sTCP:LISTEN &>/dev/null); then
             success "Caddy 跑起来了~443 端口已监听♡"
             return 0
         else
@@ -1347,7 +1398,11 @@ caddy_start() {
 caddy_stop() {
     [[ "$IS_TERMUX" == true ]] && return 1
     get_sudo || return 1
-    $NEED_SUDO systemctl stop "$CADDY_SERVICE" &>/dev/null
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        brew services stop caddy &>/dev/null
+    else
+        $NEED_SUDO systemctl stop "$CADDY_SERVICE" &>/dev/null
+    fi
     info "Caddy 停了~♡"
 }
 
@@ -1369,7 +1424,11 @@ caddy_restart() {
         fi
     fi
 
-    $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        brew services restart caddy &>/dev/null
+    else
+        $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
+    fi
     sleep 2
     if is_caddy_running; then
         if ss -tlnp 2>/dev/null | grep -q ':443\b'; then
@@ -1394,8 +1453,12 @@ caddy_reload() {
     $NEED_SUDO rm -f "$CADDY_AUTOSAVE" 2>/dev/null
     $NEED_SUDO rm -f /root/.config/caddy/autosave.json 2>/dev/null
     $NEED_SUDO rm -f /home/caddy/.config/caddy/autosave.json 2>/dev/null
-    $NEED_SUDO systemctl reload "$CADDY_SERVICE" &>/dev/null 2>&1 || \
-        $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        brew services restart caddy &>/dev/null
+    else
+        $NEED_SUDO systemctl reload "$CADDY_SERVICE" &>/dev/null 2>&1 || \
+            $NEED_SUDO systemctl restart "$CADDY_SERVICE" &>/dev/null
+    fi
     sleep 1
 }
 
@@ -1406,30 +1469,38 @@ generate_caddyfile() {
 
     get_sudo || return 1
 
-    if [[ -f "$CADDYFILE_PATH" ]]; then
-        $NEED_SUDO cp "$CADDYFILE_PATH" "${CADDYFILE_PATH}.bak.$(date +%Y%m%d_%H%M%S)" 2>/dev/null
-    fi
-
     $NEED_SUDO mkdir -p "$(dirname "$CADDYFILE_PATH")"
 
-    if [[ "$cert_type" == "acme" && -n "$domain" ]]; then
-        $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << CADDYEOF
-# Ksilly 生成 - 域名 HTTPS (Let's Encrypt)
-${domain} {
-	reverse_proxy localhost:${port}
-}
-CADDYEOF
-        info "Caddyfile 生成好了~域名: ${domain} ♡"
-    else
-        $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << CADDYEOF
-# Ksilly 生成 - 自签证书 HTTPS
-:443 {
-	tls ${CADDY_CERT_DIR}/cert.pem ${CADDY_CERT_DIR}/key.pem
-	reverse_proxy localhost:${port}
-}
-CADDYEOF
-        info "Caddyfile 生成好了~自签证书模式 ♡"
+    # 仅替换 Ksilly 自己的标记块，绝不覆盖用户已有的 Caddy 站点。
+    local tmp_file
+    tmp_file=$(mktemp) || return 1
+    if [[ -f "$CADDYFILE_PATH" ]]; then
+        $NEED_SUDO cat "$CADDYFILE_PATH" 2>/dev/null | awk '
+            /^# BEGIN KSILLY$/ { skipping=1; next }
+            /^# END KSILLY$/ { skipping=0; next }
+            !skipping { print }
+        ' > "$tmp_file"
     fi
+    {
+        echo ""
+        echo "# BEGIN KSILLY"
+        if [[ "$cert_type" == "acme" && -n "$domain" ]]; then
+            echo "# Ksilly - 域名 HTTPS (Let's Encrypt)"
+            echo "${domain} {"
+            echo "    reverse_proxy localhost:${port}"
+            echo "}"
+        else
+            echo "# Ksilly - 自签证书 HTTPS"
+            echo ":443 {"
+            echo "    tls ${CADDY_CERT_DIR}/cert.pem ${CADDY_CERT_DIR}/key.pem"
+            echo "    reverse_proxy localhost:${port}"
+            echo "}"
+        fi
+        echo "# END KSILLY"
+    } >> "$tmp_file"
+    $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null < "$tmp_file"
+    rm -f "$tmp_file"
+    info "Caddyfile 已更新（保留其他站点）~♡"
 
     if command_exists caddy; then
         if ! $NEED_SUDO caddy validate --config "$CADDYFILE_PATH" --adapter caddyfile &>/dev/null; then
@@ -1441,6 +1512,19 @@ CADDYEOF
         fi
         info "Caddyfile 语法验证通过~♡"
     fi
+}
+
+remove_ksilly_caddy_block() {
+    [[ -f "$CADDYFILE_PATH" ]] || return 0
+    local tmp_file
+    tmp_file=$(mktemp) || return 1
+    $NEED_SUDO cat "$CADDYFILE_PATH" 2>/dev/null | awk '
+        /^# BEGIN KSILLY$/ { skipping=1; next }
+        /^# END KSILLY$/ { skipping=0; next }
+        !skipping { print }
+    ' > "$tmp_file"
+    $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null < "$tmp_file"
+    rm -f "$tmp_file"
 }
 
 setup_https() {
@@ -1462,12 +1546,12 @@ setup_https() {
     echo -e "  ${BOLD}${PINK}HTTPS 安全访问配置~♡${NC}"
     divider
     echo ""
-    echo -e "  ${DIM}用 HTTP 裸奔太危险了~人家帮杂鱼配上 HTTPS♡${NC}"
+    echo -e "  ${DIM}HTTP 直接暴露不太安全，让我帮你披上 HTTPS 的小外套吧♡${NC}"
     echo -e "  ${DIM}配好后会通过 Caddy 反代~禁止 HTTP 直连哦♡${NC}"
     echo ""
 
     if ! confirm "要给酒馆配上 HTTPS 吗~♡"; then
-        info "不配就不配~裸奔的杂鱼♡"
+        info "好吧，暂时跳过 HTTPS；之后想加随时回来找我♡"
         return 0
     fi
 
@@ -1477,7 +1561,7 @@ setup_https() {
     port=$(get_port)
 
     echo ""
-    if confirm "杂鱼有域名吗~♡"; then
+    if confirm "你已经准备好域名了吗~♡"; then
         echo ""
         echo -e "  ${DIM}域名要提前解析到这台服务器的公网 IP 哦~♡${NC}"
         local public_ip
@@ -1489,7 +1573,7 @@ setup_https() {
         while [[ -z "$domain" ]]; do
             domain=$(read_input "输入域名 (例: st.example.com)~♡")
             if [[ -z "$domain" ]]; then
-                warn "域名不能为空~笨蛋♡"
+                warn "域名不能留空哦，认真填一下嘛♡"
             elif [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]*\.)+[a-zA-Z]{2,}$ ]]; then
                 warn "这看起来不像域名~再看看♡"
                 if ! confirm "确定就是这个: ${domain} ~♡"; then
@@ -1613,25 +1697,10 @@ remove_https() {
     local port
     port=$(get_port)
 
-    step "停止 Caddy~♡"
-    caddy_stop
-    $NEED_SUDO systemctl disable "$CADDY_SERVICE" &>/dev/null
-
-    if ls "${CADDYFILE_PATH}.bak."* &>/dev/null 2>&1; then
-        local latest_bak
-        latest_bak=$(ls -t "${CADDYFILE_PATH}.bak."* 2>/dev/null | head -1)
-        if [[ -n "$latest_bak" ]]; then
-            $NEED_SUDO cp "$latest_bak" "$CADDYFILE_PATH" 2>/dev/null
-            info "Caddyfile 还原了~♡"
-        fi
-    else
-        $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << 'CADDYEOF'
-:80 {
-	respond "Caddy is running" 200
-}
-CADDYEOF
-        info "Caddyfile 重置为默认~♡"
-    fi
+    step "移除 Ksilly 的 Caddy 配置~♡"
+    remove_ksilly_caddy_block
+    # Caddy 可能还承载用户的其它网站，不能在这里停止或禁用整个服务。
+    is_caddy_running && caddy_reload
 
     remove_self_signed_cert
 
@@ -2003,14 +2072,6 @@ plugin_menu() {
         return 1
     fi
 
-    if [[ -z "$GITHUB_PROXY" && "$IS_CHINA" == false ]]; then
-        if [[ -f "$KSILLY_CONF" ]]; then
-            source "$KSILLY_CONF" 2>/dev/null || true
-            IS_CHINA="${KSILLY_IS_CHINA:-false}"
-            GITHUB_PROXY="${KSILLY_GITHUB_PROXY:-}"
-        fi
-    fi
-
     while true; do
         print_banner
 
@@ -2159,13 +2220,13 @@ plugin_menu() {
 # ==================== SillyTavern 核心操作 ====================
 
 clone_sillytavern() {
-    step "克隆 SillyTavern~人家帮你拉代码♡"
+    step "正在把 SillyTavern 接回来~可别急着戳我呀♡"
 
     INSTALL_DIR=$(read_input "装到哪里~" "$DEFAULT_INSTALL_DIR")
 
     if [[ -d "$INSTALL_DIR" ]]; then
         if [[ -f "$INSTALL_DIR/server.js" || -f "$INSTALL_DIR/start.sh" ]]; then
-            warn "这里已经装过了哦~杂鱼♡"
+            warn "这里已经有一份 SillyTavern 了哦，记性要好一点嘛♡"
             if confirm "删掉重装好不好~♡"; then
                 spin "清理旧安装中~♡" rm -rf "$INSTALL_DIR"
             else
@@ -2173,15 +2234,15 @@ clone_sillytavern() {
                 return 0
             fi
         else
-            error "这个目录已经有东西了但不是 SillyTavern~换一个吧杂鱼♡"
+            error "这个目录已经有别的内容了，而且不是 SillyTavern；换个空目录再来吧♡"
             return 1
         fi
     fi
 
     echo ""
-    ask "选个分支吧杂鱼~♡"
-    echo -e "    ${GREEN}1)${NC} release  ${DIM}稳定版 (推荐笨蛋用这个)${NC}"
-    echo -e "    ${YELLOW}2)${NC} staging  ${DIM}开发版 (爱折腾的杂鱼选这个)${NC}"
+    ask "选一个分支吧~♡"
+    echo -e "    ${GREEN}1)${NC} release  ${DIM}稳定版（大多数时候选这个就对啦）${NC}"
+    echo -e "    ${YELLOW}2)${NC} staging  ${DIM}开发版（想体验新东西再选它）${NC}"
     echo ""
 
     local branch_choice=""
@@ -2195,15 +2256,15 @@ clone_sillytavern() {
 
     git_clone_with_retry "$branch" "$INSTALL_DIR" || return 1
 
-    find "$INSTALL_DIR" -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
+    normalize_yaml_tree "$INSTALL_DIR"
 
-    step "装 npm 依赖~杂鱼别急♡"
+    step "正在安装 npm 依赖~这一步会慢一点，耐心等着♡"
     ensure_npm_mirror
     cd "$INSTALL_DIR"
     if spin "npm install 中~这个比较慢哦杂鱼♡" npm install --no-audit --no-fund; then
         success "依赖装好了~♡"
     else
-        error "npm 依赖装不上~杂鱼的环境有问题吧♡"
+        error "npm 依赖没装成功，看看网络或上面的报错后再试一次吧♡"
         cd - >/dev/null
         return 1
     fi
@@ -2213,7 +2274,7 @@ clone_sillytavern() {
 }
 
 configure_sillytavern() {
-    step "配置 SillyTavern~人家手把手教杂鱼♡"
+    step "来配一下 SillyTavern 吧~跟着我选就不会迷路♡"
 
     local config_file="$INSTALL_DIR/config.yaml"
     local default_file="$INSTALL_DIR/default.yaml"
@@ -2221,7 +2282,7 @@ configure_sillytavern() {
     if [[ ! -f "$config_file" ]]; then
         if [[ -f "$default_file" ]]; then
             cp "$default_file" "$config_file"
-            sed -i 's/\r$//' "$config_file"
+            sed_inplace 's/\r$//' "$config_file"
             info "配置文件生成好了~♡"
         else
             error "连 default.yaml 都没有~仓库是不是坏了杂鱼♡"
@@ -2231,7 +2292,7 @@ configure_sillytavern() {
 
     echo ""
     divider
-    echo -e "  ${BOLD}${PINK}配置向导 ~跟着人家选就行了杂鱼♡${NC}"
+    echo -e "  ${BOLD}${PINK}配置向导 ~跟着我一步一步来就好啦♡${NC}"
     divider
 
     echo ""
@@ -2253,12 +2314,12 @@ configure_sillytavern() {
     echo ""
     echo -e "  ${BOLD}2. 端口设置${NC}"
     local port
-    port=$(read_input "端口号~不懂就用默认的吧杂鱼" "8000")
+    port=$(read_input "端口号~不确定的话就保持默认" "8000")
     if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
         set_yaml_val "port" "$port" "$config_file"
         info "端口: $port ~♡"
     else
-        warn "这什么乱七八糟的端口~用默认 8000 了笨蛋♡"
+        warn "这个端口不太对哦，先替你用默认的 8000 啦♡"
         port="8000"
     fi
 
@@ -2279,7 +2340,7 @@ configure_sillytavern() {
     echo -e "  ${BOLD}4. 基础认证 (HTTP Auth)${NC}"
     echo -e "     ${DIM}访问的时候要输用户名密码~${NC}"
     if [[ "$listen_enabled" == true ]]; then
-        echo -e "     ${RED}都开了远程访问了~不设密码的话杂鱼是想被人偷窥吗♡${NC}"
+        echo -e "     ${RED}既然要远程访问，最好设置密码；可别让陌生人钻空子哦♡${NC}"
     fi
     echo ""
     if confirm "开启基础认证~♡"; then
@@ -2295,23 +2356,28 @@ configure_sillytavern() {
         local auth_pass
         auth_pass=$(read_password "密码~设个复杂点的♡")
 
+        local quoted_user quoted_pass escaped_user escaped_pass
+        quoted_user=$(yaml_quote "$auth_user")
+        quoted_pass=$(yaml_quote "$auth_pass")
+        escaped_user=$(sed_replacement_escape "$quoted_user")
+        escaped_pass=$(sed_replacement_escape "$quoted_pass")
         if grep -q "basicAuthUser:" "$config_file" 2>/dev/null; then
-            sed -i "/basicAuthUser:/,/^[^ #]/{
-                s|\(\s*\)username:.*|\1username: \"${auth_user}\"|
-                s|\(\s*\)password:.*|\1password: \"${auth_pass}\"|
+            sed_inplace "/basicAuthUser:/,/^[^ #]/{
+                s|\(\s*\)username:.*|\1username: ${escaped_user}|
+                s|\(\s*\)password:.*|\1password: ${escaped_pass}|
             }" "$config_file"
         else
             cat >> "$config_file" << EOF
 basicAuthUser:
-  username: "${auth_user}"
-  password: "${auth_pass}"
+  username: ${quoted_user}
+  password: ${quoted_pass}
 EOF
         fi
 
         success "认证开好了~(用户: $auth_user) ♡"
     else
         set_yaml_val "basicAuthMode" "false" "$config_file"
-        info "不设认证啊~胆子挺大的杂鱼♡"
+        info "暂时不设认证也可以，不过开放访问时要多留心哦♡"
     fi
 
     if [[ "$listen_enabled" == true ]]; then
@@ -2362,7 +2428,7 @@ start_sillytavern() {
     fi
 
     if is_running; then
-        warn "已经在跑了啦~杂鱼眼瞎了吗♡"
+        warn "它已经在运行啦，不要急着重复点嘛♡"
         show_access_info
         return 0
     fi
@@ -2404,14 +2470,14 @@ start_sillytavern() {
             cd - >/dev/null
             ;;
         *)
-            warn "选的什么鬼~杂鱼♡"
+            warn "这个选项我不认识，再选一次给我看嘛♡"
             ;;
     esac
 }
 
 stop_sillytavern() {
     if ! is_running; then
-        info "本来就没在跑~瞎操心的杂鱼♡"
+        info "它本来就没在运行，不用替它操心啦♡"
         return 0
     fi
     step "停止 SillyTavern~♡"
@@ -2602,17 +2668,28 @@ do_update() {
     fi
 
     if ! spin "拉取最新代码中~杂鱼等等♡" git pull --ff-only; then
-        warn "快速合并不行~人家强制更新了♡"
+        warn "快速合并失败：可能存在本地提交或修改。"
+        git status --short 2>/dev/null | sed 's/^/    /'
+        if ! confirm "要丢弃本地代码修改并强制更新吗~♡"; then
+            info "已保留本地代码，取消更新~♡"
+            cd - >/dev/null
+            return 1
+        fi
+        warn "将强制同步远程分支；config.yaml 备份仍保留在: $backup_dir"
         local current_branch
         current_branch=$(git branch --show-current)
-        spin_cmd "强制更新中~♡" "git fetch --all 2>/dev/null && git reset --hard 'origin/$current_branch' 2>/dev/null"
+        if ! spin_cmd "强制更新中~♡" "git fetch --all 2>/dev/null && git reset --hard 'origin/$current_branch' 2>/dev/null"; then
+            error "强制更新也失败了~已保留当前目录。"
+            cd - >/dev/null
+            return 1
+        fi
     fi
     success "代码更新好了~♡"
 
     [[ "$IS_CHINA" == true && -n "$GITHUB_PROXY" ]] && \
         git remote set-url origin "$SILLYTAVERN_REPO" 2>/dev/null
 
-    find . -name "*.yaml" -exec sed -i 's/\r$//' {} \; 2>/dev/null || true
+    normalize_yaml_tree "."
 
     ensure_npm_mirror
     spin "更新 npm 依赖中~♡" npm install --no-audit --no-fund
@@ -2626,7 +2703,7 @@ do_update() {
 
     save_script 2>/dev/null && info "管理脚本也更新了~♡"
 
-    success "SillyTavern 更新完成~感谢人家吧杂鱼♡"
+    success "SillyTavern 更新完成啦~这次做得还不错，夸我一句也不是不行♡"
 
     echo ""
     if confirm "现在就启动~♡"; then
@@ -2669,7 +2746,7 @@ handle_update() {
         fi
     else
         echo ""
-        success "已经是最新的了~杂鱼白担心了♡"
+        success "已经是最新版本啦~白担心一场，不过谨慎是好事♡"
     fi
 }
 
@@ -2682,7 +2759,7 @@ uninstall_sillytavern() {
     fi
 
     echo ""
-    warn "要卸载 SillyTavern 了哦~杂鱼真的舍得吗♡"
+    warn "真的要卸载 SillyTavern 吗？这次删掉可就要重新准备了哦♡"
     echo -e "    安装目录: ${DIM}${INSTALL_DIR}${NC}"
 
     if is_plugin_installed "$PLUGIN_1_FOLDER" || is_plugin_installed "$PLUGIN_2_FOLDER"; then
@@ -2698,9 +2775,9 @@ uninstall_sillytavern() {
     fi
 
     echo ""
-    confirm "真的要删掉吗~后悔可没药吃哦杂鱼♡" || { info "算了算了~♡"; return 0; }
+    confirm "确定删除吗？我再给你一次反悔的机会哦♡" || { info "嗯，这样更稳妥♡"; return 0; }
     echo ""
-    confirm "再确认一次~真的删光所有数据♡" || { info "就知道你不敢~杂鱼♡"; return 0; }
+    confirm "最后确认：包括数据都要删除吗♡" || { info "停在这里就好，数据还在♡"; return 0; }
 
     step "开始卸载~♡"
 
@@ -2709,20 +2786,8 @@ uninstall_sillytavern() {
 
     if [[ "$CADDY_HTTPS_ENABLED" == "true" && "$IS_TERMUX" != true ]]; then
         step "清理 HTTPS 配置~♡"
-        caddy_stop
-        $NEED_SUDO systemctl disable "$CADDY_SERVICE" &>/dev/null
-
-        if ls "${CADDYFILE_PATH}.bak."* &>/dev/null 2>&1; then
-            local latest_bak
-            latest_bak=$(ls -t "${CADDYFILE_PATH}.bak."* 2>/dev/null | head -1)
-            [[ -n "$latest_bak" ]] && $NEED_SUDO cp "$latest_bak" "$CADDYFILE_PATH" 2>/dev/null
-        else
-            $NEED_SUDO tee "$CADDYFILE_PATH" > /dev/null << 'CADDYEOF'
-:80 {
-	respond "Caddy is running" 200
-}
-CADDYEOF
-        fi
+        remove_ksilly_caddy_block
+        is_caddy_running && caddy_reload
 
         remove_self_signed_cert
 
@@ -2804,7 +2869,7 @@ modify_config_menu() {
 
     local config_file="$INSTALL_DIR/config.yaml"
     if [[ ! -f "$config_file" ]]; then
-        error "配置文件不见了~杂鱼是不是手欠删了♡"
+        error "没找到配置文件；可能被移动或删除了，恢复后再试试吧♡"
         return 1
     fi
 
@@ -2902,7 +2967,7 @@ modify_config_menu() {
                         [[ "$cur_listen" == "true" ]] && open_firewall_port "$new_port"
                     fi
                 else
-                    error "这什么端口~$new_port ~杂鱼乱填♡"
+                    error "端口 $new_port 不可用，请输入 1 到 65535 之间的数字哦♡"
                 fi
                 ;;
             3)
@@ -2929,16 +2994,21 @@ modify_config_menu() {
                     done
                     local auth_pass
                     auth_pass=$(read_password "密码~")
+                    local quoted_user quoted_pass escaped_user escaped_pass
+                    quoted_user=$(yaml_quote "$auth_user")
+                    quoted_pass=$(yaml_quote "$auth_pass")
+                    escaped_user=$(sed_replacement_escape "$quoted_user")
+                    escaped_pass=$(sed_replacement_escape "$quoted_pass")
                     if grep -q "basicAuthUser:" "$config_file" 2>/dev/null; then
-                        sed -i "/basicAuthUser:/,/^[^ #]/{
-                            s|\(\s*\)username:.*|\1username: \"${auth_user}\"|
-                            s|\(\s*\)password:.*|\1password: \"${auth_pass}\"|
+                        sed_inplace "/basicAuthUser:/,/^[^ #]/{
+                            s|\(\s*\)username:.*|\1username: ${escaped_user}|
+                            s|\(\s*\)password:.*|\1password: ${escaped_pass}|
                         }" "$config_file"
                     else
                         cat >> "$config_file" << EOF
 basicAuthUser:
-  username: "${auth_user}"
-  password: "${auth_pass}"
+  username: ${quoted_user}
+  password: ${quoted_pass}
 EOF
                     fi
                     success "认证开了~(用户: $auth_user) ♡"
@@ -2982,7 +3052,7 @@ EOF
                 if confirm "要重置成默认配置吗~杂鱼改坏了♡"; then
                     if [[ -f "$INSTALL_DIR/default.yaml" ]]; then
                         cp "$INSTALL_DIR/default.yaml" "$config_file"
-                        sed -i 's/\r$//' "$config_file"
+                        sed_inplace 's/\r$//' "$config_file"
                         success "重置好了~从头再来吧杂鱼♡"
 
                         if [[ "$CADDY_HTTPS_ENABLED" == "true" ]]; then
@@ -3008,7 +3078,7 @@ EOF
                 return 0
                 ;;
             *)
-                warn "没这个选项~杂鱼眼花了吗♡"
+                warn "这里没有这个选项哦，再看一眼菜单嘛♡"
                 ;;
         esac
 
@@ -3126,7 +3196,7 @@ pm2_menu() {
 full_install() {
     print_banner
 
-    echo -e "  ${BOLD}${PINK}嘛~人家就帮杂鱼装一次 SillyTavern 吧♡${NC}"
+    echo -e "  ${BOLD}${PINK}好吧，这次就由我陪你把 SillyTavern 装好♡${NC}"
     divider
 
     detect_os
@@ -3186,7 +3256,7 @@ full_install() {
     echo ""
     divider
     echo ""
-    echo -e "  ${BOLD}${PINK}🎉 装~好~了~♡ 感谢人家吧杂鱼~${NC}"
+    echo -e "  ${BOLD}${PINK}🎉 装好啦~♡ 哼，表现不错嘛${NC}"
     echo ""
     info "安装目录: $INSTALL_DIR"
 
@@ -3208,7 +3278,7 @@ full_install() {
     divider
     echo ""
 
-    if confirm "现在就启动吗~急性子的杂鱼♡"; then
+    if confirm "现在就启动吗~等不及了吧♡"; then
         start_sillytavern
     else
         echo ""
@@ -3283,7 +3353,7 @@ main_menu() {
         case "$choice" in
             1)
                 if check_installed; then
-                    warn "已经装过了呀~杂鱼健忘♡"
+                warn "已经安装过啦，看来你有点忘记了呢♡"
                     confirm "要重新装吗~♡" || continue
                 fi
                 full_install
@@ -3345,7 +3415,7 @@ main_menu() {
                 exit 0
                 ;;
             *)
-                warn "没这个选项~数字都看不懂吗杂鱼♡"
+                warn "这个选项不在菜单里哦，慢慢选，不着急♡"
                 sleep 0.5
                 ;;
         esac
@@ -3362,7 +3432,7 @@ main() {
         Linux|Darwin) ;;
         *)
             if [[ -z "${TERMUX_VERSION:-}" && ! -d "/data/data/com.termux" ]]; then
-                error "这脚本只支持 Linux / macOS / Termux ~杂鱼用错系统了♡"
+                error "这个脚本目前只支持 Linux、macOS 和 Termux；换到受支持的环境再来吧♡"
                 exit 1
             fi
             ;;
